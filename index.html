@@ -1,0 +1,947 @@
+<!DOCTYPE html>
+<html lang="pt-BR" translate="no">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="google" content="notranslate" />
+  <meta http-equiv="Content-Language" content="pt-BR" />
+  <title>Lumini – Gestão de Carreira e Polivalência</title>
+  <link rel="icon" type="image/png" href="images/logo-black.png" />
+  <link rel="apple-touch-icon" href="images/logo-black.png" />
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700&family=Sora:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+
+<!-- TELA DE LOADING -->
+<div id="firebase-loading" class="firebase-loading-screen">
+  <div class="firebase-loading-box">
+    <img src="images/logo-white.png" alt="Lumini" style="height:52px;margin-bottom:24px;opacity:0.95" />
+    <div class="firebase-spinner"></div>
+    <p class="firebase-loading-text">Conectando ao sistema...</p>
+    <p class="firebase-loading-sub">Aguarde um momento ☁️</p>
+  </div>
+</div>
+
+<!-- TELA DE LOGIN -->
+<div id="page-login" class="page active" style="display:none">
+  <div class="login-bg">
+
+    <!-- Estampas Lumini -->
+    <div class="stamps-container" id="stamps-container">
+      <div class="stamp-float stamp-tl" data-ref="AD0901" style="--size:145px;--dur:7s;--delay:0s;--rot:-14deg">
+        <div class="stamp-img-wrap"><img src="images/stamp-1.jpg" alt="Estampa AD0901" draggable="false" /></div>
+        <div class="stamp-ref">AD0901</div>
+      </div>
+      <div class="stamp-float stamp-ml" data-ref="AD1341" style="--size:140px;--dur:8s;--delay:-3s;--rot:8deg">
+        <div class="stamp-img-wrap"><img src="images/stamp-2.jpg" alt="Estampa AD1341" draggable="false" /></div>
+        <div class="stamp-ref">AD1341</div>
+      </div>
+      <div class="stamp-float stamp-bl" data-ref="NT8479" style="--size:138px;--dur:10s;--delay:-1s;--rot:-10deg">
+        <div class="stamp-img-wrap"><img src="images/stamp-3.jpg" alt="Estampa NT8479" draggable="false" /></div>
+        <div class="stamp-ref">NT8479</div>
+      </div>
+      <div class="stamp-float stamp-tr" data-ref="NT8023" style="--size:148px;--dur:9s;--delay:-2s;--rot:11deg">
+        <div class="stamp-img-wrap"><img src="images/stamp-4.jpg" alt="Estampa NT8023" draggable="false" /></div>
+        <div class="stamp-ref">NT8023</div>
+      </div>
+      <div class="stamp-float stamp-mr" data-ref="AD2339" style="--size:135px;--dur:11s;--delay:-5s;--rot:6deg">
+        <div class="stamp-img-wrap"><img src="images/stamp-5.jpg" alt="Estampa AD2339" draggable="false" /></div>
+        <div class="stamp-ref">AD2339</div>
+      </div>
+      <div class="stamp-float stamp-br" data-ref="NT6785" style="--size:142px;--dur:8.5s;--delay:-4s;--rot:-8deg">
+        <div class="stamp-img-wrap"><img src="images/stamp-6.jpg" alt="Estampa NT6785" draggable="false" /></div>
+        <div class="stamp-ref">NT6785</div>
+      </div>
+    </div>
+
+    <div class="login-card">
+      <div class="login-logo">
+        <div class="logo-icon">
+          <img src="images/logo-white.png" alt="Lumini" style="object-fit:contain;width:100%;height:100%" />
+        </div>
+        <h1 class="hero-title" translate="no">Lumini</h1>
+        <p class="display-text">Gestão de Carreira &amp; Polivalência</p>
+      </div>
+
+      <form class="login-form" onsubmit="doLogin(); return false;">
+        <div class="form-group">
+          <label><i class="fas fa-envelope"></i> E-mail</label>
+          <input type="text" id="login-email" placeholder="Seu e-mail de acesso" autocomplete="username" />
+        </div>
+        <div class="form-group">
+          <label><i class="fas fa-lock"></i> Senha</label>
+          <div class="input-icon-right">
+            <input type="password" id="login-password" placeholder="••••••••" autocomplete="current-password" />
+            <i class="fas fa-eye toggle-pass" onclick="togglePass()"></i>
+          </div>
+        </div>
+        <div id="login-error" class="login-error hidden">E-mail ou senha incorretos.</div>
+        <button type="submit" class="btn-primary btn-full">
+          <i class="fas fa-sign-in-alt"></i> Entrar
+        </button>
+      </form>
+
+      <div class="login-demo">
+        <p><i class="fas fa-info-circle"></i> Em caso de dúvidas sobre seu acesso, contate o administrador.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- APP PRINCIPAL -->
+<div id="app" class="hidden">
+
+  <!-- TOPBAR -->
+  <header class="topbar">
+    <button class="menu-toggle" onclick="toggleSidebar()">
+      <i class="fas fa-bars"></i>
+    </button>
+    <div class="topbar-brand">
+      <img src="images/logo-white.png" alt="Lumini" class="topbar-logo" />
+      <span translate="no">Lumini</span>
+      <div class="topbar-breadcrumb" id="topbar-breadcrumb"></div>
+    </div>
+    <div class="topbar-right">
+      <!-- Dark Mode Toggle -->
+      <div class="dark-toggle-wrap" title="Alternar modo claro/escuro">
+        <label class="dark-toggle" id="dark-toggle-label" aria-label="Modo escuro">
+          <input type="checkbox" id="dark-mode-checkbox" onchange="toggleDarkMode(this.checked)" />
+          <div class="dark-toggle-track"></div>
+          <div class="dark-toggle-thumb">
+            <span class="icon-sun">☀️</span>
+            <span class="icon-moon">🌙</span>
+          </div>
+        </label>
+      </div>
+      <div class="nt-notif-wrap" onclick="event.stopPropagation(); window._ntTogglePanel && window._ntTogglePanel(event)">
+        <div class="notif-badge" id="notif-badge" title="Notificações">
+          <i class="fas fa-bell"></i>
+          <span class="badge-count" id="badge-count">0</span>
+        </div>
+      </div>
+      <div class="user-avatar" onclick="toggleUserMenu()">
+        <span id="user-initials">AD</span>
+      </div>
+      <div class="user-menu hidden" id="user-menu">
+        <div class="user-menu-name" id="user-menu-name">Administrador</div>
+        <div class="user-menu-role" id="user-menu-role">Admin</div>
+        <hr/>
+        <a href="#" onclick="window.startOnboardingTour && window.startOnboardingTour(true); document.getElementById('user-menu').classList.add('hidden');"><i class="fas fa-question-circle"></i> Tutorial de Ajuda</a>
+        <a href="#" onclick="doLogout()"><i class="fas fa-sign-out-alt"></i> Sair</a>
+      </div>
+    </div>
+  </header>
+
+  <!-- SIDEBAR OVERLAY (fora do sidebar para não bloquear nav-items) -->
+  <div class="sidebar-overlay" id="sidebar-overlay" onclick="closeSidebar()"></div>
+
+  <!-- SIDEBAR -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <img src="images/logo-white.png" alt="Lumini" class="sidebar-logo" />
+      <span class="sidebar-brand-name" translate="no">Lumini</span>
+    </div>
+    <nav class="sidebar-nav">
+      <!-- ADMIN MENU -->
+      <div id="menu-admin" class="menu-group hidden">
+        <div class="menu-label">ADMINISTRADOR</div>
+        <a class="nav-item" data-page="admin-dashboard" onclick="navigateTo('admin-dashboard')">
+          <i class="fas fa-tachometer-alt"></i> Dashboard
+        </a>
+        <a class="nav-item" data-page="comms" data-permission="comms" onclick="navigateTo('comms')">
+          <i class="fas fa-bullhorn"></i> Comunicados
+        </a>
+        <a class="nav-item" data-page="admin-employees" onclick="navigateTo('admin-employees')">
+          <i class="fas fa-users"></i> Funcionários (Carreira)
+        </a>
+        <a class="nav-item" data-page="admin-careers" onclick="navigateTo('admin-careers')">
+          <i class="fas fa-sitemap"></i> Trilha de Carreira
+        </a>
+        <a class="nav-item" data-page="admin-supervisors" onclick="navigateTo('admin-supervisors')">
+          <i class="fas fa-user-tie"></i> Por Supervisor
+        </a>
+        <a class="nav-item" data-page="admin-evaluations" onclick="navigateTo('admin-evaluations')">
+          <i class="fas fa-clipboard-list"></i> Avaliações
+        </a>
+        <a class="nav-item" data-page="admin-matrix" onclick="navigateTo('admin-matrix')">
+          <i class="fas fa-th"></i> Matriz de Polivalência
+        </a>
+        <a class="nav-item" data-page="admin-reports" onclick="navigateTo('admin-reports')">
+          <i class="fas fa-chart-bar"></i> Relatórios
+        </a>
+        <div class="menu-separator"></div>
+        <div class="menu-label-sub">PRODUÇÃO</div>
+        <a class="nav-item" data-page="admin-teams" onclick="navigateTo('admin-teams')">
+          <i class="fas fa-layer-group"></i> Equipes de Produção
+        </a>
+        <div class="menu-separator"></div>
+        <div class="menu-label-sub">COMPRAS</div>
+        <a class="nav-item nav-purchases" data-page="purchases" data-permission="purchases" onclick="navigateTo('purchases')">
+          <i class="fas fa-shopping-cart"></i> Compras
+        </a>
+        <div class="menu-separator"></div>
+        <div class="menu-label-sub">RH &amp; TURNOVER</div>
+        <a class="nav-item" data-page="admin-rh-dashboard" onclick="navigateTo('admin-rh-dashboard')">
+          <i class="fas fa-heartbeat"></i> Dashboard RH
+        </a>
+        <a class="nav-item" data-page="admin-rh-employees" onclick="navigateTo('admin-rh-employees')">
+          <i class="fas fa-id-card"></i> Colaboradores (179)
+        </a>
+        <a class="nav-item" data-page="admin-rh-turnover" onclick="navigateTo('admin-rh-turnover')">
+          <i class="fas fa-sync-alt"></i> Turnover &amp; Rotatividade
+        </a>
+        <a class="nav-item" data-page="admin-rh-holerites" onclick="navigateTo('admin-rh-holerites')">
+          <i class="fas fa-file-invoice-dollar"></i> Publicar Holerite
+        </a>
+        <div class="menu-separator"></div>
+        <div class="menu-label-sub">SISTEMA</div>
+        <a class="nav-item nav-users" data-page="admin-users" onclick="navigateTo('admin-users')">
+          <i class="fas fa-user-cog"></i> Usuários &amp; Permissões
+        </a>
+      </div>
+
+      <!-- RH MENU -->
+      <div id="menu-rh" class="menu-group hidden">
+        <div class="menu-label">RH — RECURSOS HUMANOS</div>
+        <a class="nav-item" data-page="comms" data-permission="comms" onclick="navigateTo('comms')">
+          <i class="fas fa-bullhorn"></i> Comunicados
+        </a>
+        <a class="nav-item" data-page="rh-dashboard" onclick="navigateTo('rh-dashboard')">
+          <i class="fas fa-heartbeat"></i> Dashboard RH
+        </a>
+        <a class="nav-item" data-page="rh-employees" onclick="navigateTo('rh-employees')">
+          <i class="fas fa-id-card"></i> Cadastro de Colaboradores
+        </a>
+        <a class="nav-item" data-page="rh-turnover" onclick="navigateTo('rh-turnover')">
+          <i class="fas fa-sync-alt"></i> Turnover & Rotatividade
+        </a>
+        <a class="nav-item" data-page="rh-promocoes" onclick="navigateTo('rh-promocoes')">
+          <i class="fas fa-envelope-open-text"></i> Promoções Homologadas
+          <span class="menu-badge" id="badge-rh-promo"></span>
+        </a>
+        <a class="nav-item" data-page="rh-holerites" onclick="navigateTo('rh-holerites')">
+          <i class="fas fa-file-invoice-dollar"></i> Publicar Holerite
+        </a>
+      </div>
+
+      <!-- SUPERVISOR MENU -->
+      <div id="menu-supervisor" class="menu-group hidden">
+        <div class="menu-label">SUPERVISOR</div>
+        <a class="nav-item" data-page="supervisor-home" onclick="navigateTo('supervisor-home')">
+          <i class="fas fa-home"></i> Início
+        </a>
+        <a class="nav-item" data-page="comms" data-permission="comms" onclick="navigateTo('comms')">
+          <i class="fas fa-bullhorn"></i> Comunicados
+        </a>
+        <a class="nav-item" data-page="supervisor-employees" onclick="navigateTo('supervisor-employees')">
+          <i class="fas fa-users"></i> Minha Equipe
+        </a>
+        <a class="nav-item" data-page="admin-careers" data-permission="careers" onclick="navigateTo('admin-careers')">
+          <i class="fas fa-sitemap"></i> Trilha de Carreira
+        </a>
+        <a class="nav-item" data-page="supervisor-team-attendance" onclick="navigateTo('supervisor-team-attendance')">
+          <i class="fas fa-clipboard-check"></i> Frequência da Equipe
+        </a>
+        <a class="nav-item" data-page="supervisor-promo-history" onclick="navigateTo('supervisor-promo-history')">
+          <i class="fas fa-rocket"></i> Histórico de Promoções
+        </a>
+        <a class="nav-item" data-page="supervisor-excecoes" onclick="navigateTo('supervisor-excecoes')">
+          <i class="fas fa-paper-plane"></i> Solicitações de Exceção
+          <span class="menu-badge" id="badge-excecoes-sup"></span>
+        </a>
+        <a class="nav-item" data-page="admin-matrix" onclick="navigateTo('admin-matrix')">
+          <i class="fas fa-th"></i> Matriz de Polivalência
+        </a>
+      </div>
+
+      <!-- GERENTE MENU (André) -->
+      <div id="menu-manager" class="menu-group hidden">
+        <div class="menu-label">GERENTE</div>
+        <!-- Compras visível se tiver permissão -->
+        <a class="nav-item" data-page="supervisor-home" onclick="navigateTo('supervisor-home')">
+          <i class="fas fa-home"></i> Início
+        </a>
+        <a class="nav-item" data-page="comms" data-permission="comms" onclick="navigateTo('comms')">
+          <i class="fas fa-bullhorn"></i> Comunicados
+        </a>
+        <a class="nav-item" data-page="supervisor-employees" onclick="navigateTo('supervisor-employees')">
+          <i class="fas fa-users"></i> Minha Equipe
+        </a>
+        <a class="nav-item" data-page="admin-careers" data-permission="careers" onclick="navigateTo('admin-careers')">
+          <i class="fas fa-sitemap"></i> Trilha de Carreira
+        </a>
+        <a class="nav-item" data-page="manager-teams" onclick="navigateTo('manager-teams')">
+          <i class="fas fa-layer-group"></i> Equipes de Produção
+        </a>
+        <a class="nav-item" data-page="manager-excecoes" onclick="navigateTo('manager-excecoes')">
+          <i class="fas fa-shield-alt"></i> Aprovar Exceções
+          <span class="menu-badge" id="badge-excecoes-mgr"></span>
+        </a>
+        <a class="nav-item" data-page="manager-promo-approvals" onclick="navigateTo('manager-promo-approvals')">
+          <i class="fas fa-user-check"></i> Aprovar Promoções
+          <span class="menu-badge" id="badge-promo-wesley"></span>
+        </a>
+        <a class="nav-item" data-page="admin-supervisors" onclick="navigateTo('admin-supervisors')">
+          <i class="fas fa-chart-bar"></i> Visão por Supervisor
+        </a>
+        <a class="nav-item" data-page="admin-matrix" onclick="navigateTo('admin-matrix')">
+          <i class="fas fa-th"></i> Matriz de Polivalência
+        </a>
+        <div class="menu-separator" data-permission="purchases"></div>
+        <div class="menu-label-sub" data-permission="purchases">COMPRAS</div>
+        <a class="nav-item nav-purchases" data-page="purchases" data-permission="purchases" onclick="navigateTo('purchases')">
+          <i class="fas fa-shopping-cart"></i> Compras
+        </a>
+      </div>
+
+      <!-- BOSS MENU (Carlos) -->
+      <div id="menu-boss" class="menu-group hidden">
+        <div class="menu-label">DIRETOR GERAL</div>
+        <a class="nav-item" data-page="boss-dashboard" onclick="navigateTo('boss-dashboard')">
+          <i class="fas fa-crown"></i> Painel Geral
+        </a>
+        <a class="nav-item" data-page="comms" data-permission="comms" onclick="navigateTo('comms')">
+          <i class="fas fa-bullhorn"></i> Comunicados
+        </a>
+        <a class="nav-item" data-page="boss-promo-approvals" onclick="navigateTo('boss-promo-approvals')">
+          <i class="fas fa-trophy"></i> Aprovação Final
+          <span class="menu-badge" id="badge-promo-carlos"></span>
+        </a>
+        <a class="nav-item" data-page="admin-supervisors" onclick="navigateTo('admin-supervisors')">
+          <i class="fas fa-chart-bar"></i> Visão por Equipe
+        </a>
+        <a class="nav-item" data-page="admin-matrix" onclick="navigateTo('admin-matrix')">
+          <i class="fas fa-th"></i> Matriz de Polivalência
+        </a>
+        <div class="menu-separator" data-permission="purchases"></div>
+        <div class="menu-label-sub" data-permission="purchases">COMPRAS</div>
+        <a class="nav-item nav-purchases" data-page="purchases" data-permission="purchases" onclick="navigateTo('purchases')">
+          <i class="fas fa-shopping-cart"></i> Compras
+        </a>
+        <div class="menu-separator"></div>
+        <div class="menu-label-sub">RH &amp; TURNOVER</div>
+        <a class="nav-item" data-page="boss-rh-dashboard" onclick="navigateTo('boss-rh-dashboard')">
+          <i class="fas fa-heartbeat"></i> Dashboard RH
+        </a>
+        <a class="nav-item" data-page="boss-rh-turnover" onclick="navigateTo('boss-rh-turnover')">
+          <i class="fas fa-sync-alt"></i> Turnover &amp; Rotatividade
+        </a>
+      </div>
+
+      <div class="sidebar-footer">
+        <button class="notif-config-btn" id="notif-config-btn" onclick="openNotifConfig()" title="Configurar notificações">
+          <i class="fas fa-bell"></i> <span id="notif-config-label">Notificações Ativas</span>
+        </button>
+        <button class="help-tour-btn" id="help-tour-btn" onclick="window.startOnboardingTour && window.startOnboardingTour(true)" data-tooltip="Alt+T para abrir">
+          <i class="fas fa-question-circle"></i> Ajuda &amp; Tutorial
+          <span class="help-tour-badge" id="help-tour-badge">NOVO</span>
+        </button>
+        <a href="#" onclick="doLogout()" class="nav-item logout-item">
+          <i class="fas fa-sign-out-alt"></i> Sair
+        </a>
+      </div>
+    </nav>
+  </aside>
+
+  <!-- CONTEÚDO PRINCIPAL -->
+  <main class="main-content">
+
+    <!-- ADMIN: DASHBOARD -->
+    <div id="page-admin-dashboard" class="page-section hidden">
+      <div class="page-header">
+        <h2><i class="fas fa-tachometer-alt"></i> Dashboard</h2>
+        <span class="page-sub">Visão geral do sistema de carreira</span>
+      </div>
+      <div class="cards-grid">
+        <div class="stat-card blue"><div class="stat-icon"><i class="fas fa-users"></i></div><div class="stat-info"><span class="stat-value" id="stat-total">0</span><span class="stat-label">Total de Funcionários</span></div></div>
+        <div class="stat-card orange"><div class="stat-icon"><i class="fas fa-clock"></i></div><div class="stat-info"><span class="stat-value" id="stat-apt">0</span><span class="stat-label">Aptos para Avaliação</span></div></div>
+        <div class="stat-card yellow"><div class="stat-icon"><i class="fas fa-hourglass-half"></i></div><div class="stat-info"><span class="stat-value" id="stat-pending">0</span><span class="stat-label">Avaliações Pendentes</span></div></div>
+        <div class="stat-card green"><div class="stat-icon"><i class="fas fa-trophy"></i></div><div class="stat-info"><span class="stat-value" id="stat-promoted">0</span><span class="stat-label">Promoções Aprovadas</span></div></div>
+      </div>
+
+      <div class="dashboard-row dashboard-row-charts">
+        <div class="chart-card">
+          <div class="chart-card-header">
+            <div>
+              <h3><i class="fas fa-id-badge"></i> <span id="chart-role-title">Funcionários por Cargo</span></h3>
+              <span class="chart-sub">Clique em uma equipe para filtrar <span id="chart-role-filter-tag"></span></span>
+            </div>
+          </div>
+          <div style="height:280px; position:relative;">
+            <canvas id="chart-by-role"></canvas>
+          </div>
+        </div>
+        <div class="chart-card chart-card-team">
+          <div class="chart-card-header">
+            <div>
+              <h3><i class="fas fa-layer-group"></i> Por Equipe</h3>
+              <span class="chart-sub">Funcionários por supervisor</span>
+            </div>
+          </div>
+          <div class="team-chart-wrap">
+            <div style="height:180px; position:relative;">
+              <canvas id="chart-by-team"></canvas>
+            </div>
+            <div id="chart-team-legend" class="chart-team-legend"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="dashboard-row">
+        <div class="chart-card">
+          <div class="chart-card-header">
+            <div>
+              <h3><i class="fas fa-chart-bar"></i> Funcionários por Status</h3>
+              <span class="chart-sub">Situação atual no plano de carreira</span>
+            </div>
+          </div>
+          <div style="height:200px; position:relative;">
+            <canvas id="chart-status"></canvas>
+          </div>
+        </div>
+        <div class="recent-card">
+          <h3><i class="fas fa-bell"></i> Aguardando Avaliação</h3>
+          <div id="recent-eligible-list" class="recent-list"></div>
+        </div>
+      </div>
+
+      <div class="promo-history-section">
+        <div class="promo-history-header">
+          <div class="promo-history-title">
+            <i class="fas fa-rocket"></i>
+            <div>
+              <h3>Histórico de Promoções</h3>
+              <span>Jornada dos funcionários a partir do cargo de Ajudante de Produção</span>
+            </div>
+          </div>
+          <div class="promo-kpis" id="promo-kpis"></div>
+        </div>
+        <div class="promo-charts-row">
+          <div class="promo-chart-box">
+            <h4><i class="fas fa-chart-bar"></i> Para onde foram os Ajudantes?</h4>
+            <p class="promo-chart-sub">Cargos de destino dos promovidos</p>
+            <div id="promo-dest-chart" class="promo-dest-chart"></div>
+          </div>
+          <div class="promo-chart-box">
+            <h4><i class="fas fa-history"></i> Linha do Tempo das Promoções</h4>
+            <p class="promo-chart-sub">Últimas promoções registradas</p>
+            <div id="promo-timeline" class="promo-timeline-list"></div>
+          </div>
+        </div>
+        <div class="promo-table-box">
+          <div class="promo-table-header">
+            <h4><i class="fas fa-list-alt"></i> Detalhamento — Todos os Promovidos</h4>
+            <span id="promo-table-count" class="promo-count-badge">0 registros</span>
+          </div>
+          <div id="promo-detail-table"></div>
+        </div>
+      </div>
+
+      <!-- PAINEL DE GERENCIAMENTO DO TUTORIAL -->
+      <div class="tour-admin-panel" style="margin-top:20px">
+        <h4><i class="fas fa-question-circle" style="color:#002B5B"></i> Gerenciar Tutorial por Perfil</h4>
+        <p style="font-size:12.5px;color:var(--text-secondary);margin-bottom:12px">Redefina o tutorial para qualquer perfil. O usuário verá o tutorial automaticamente no próximo login.</p>
+        <div class="tour-reset-grid">
+          <button class="tour-reset-btn" onclick="window.resetOnboardingTour('admin');window._ntShowToast('Tutorial do Admin resetado','success')">
+            <i class="fas fa-redo"></i> Admin (Wesley)
+          </button>
+          <button class="tour-reset-btn" onclick="window.resetOnboardingTour('manager');window._ntShowToast('Tutorial do Gerente resetado','success')">
+            <i class="fas fa-redo"></i> Gerente (André)
+          </button>
+          <button class="tour-reset-btn" onclick="window.resetOnboardingTour('supervisor');window._ntShowToast('Tutorial dos Supervisores resetado','success')">
+            <i class="fas fa-redo"></i> Supervisores
+          </button>
+          <button class="tour-reset-btn" onclick="window.resetOnboardingTour('boss');window._ntShowToast('Tutorial do Diretor resetado','success')">
+            <i class="fas fa-redo"></i> Diretor (Carlos)
+          </button>
+          <button class="tour-reset-btn" onclick="window.resetOnboardingTour('rh');window._ntShowToast('Tutorial do RH resetado','success')">
+            <i class="fas fa-redo"></i> RH
+          </button>
+          <button class="tour-reset-btn" onclick="window.resetOnboardingTour();window._ntShowToast('Todos os tutoriais foram resetados','success')" style="background:#FEF3C7;border-color:#FDE68A;color:#92400E">
+            <i class="fas fa-redo-alt"></i> Resetar Todos
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ADMIN: FUNCIONÁRIOS -->
+    <div id="page-admin-employees" class="page-section hidden">
+      <div class="page-header">
+        <div>
+          <h2><i class="fas fa-users"></i> Gestão de Funcionários</h2>
+          <span class="page-sub">Trilha de carreira — Setor de Produção</span>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn-outline" onclick="openImportFromRH()" title="Importar colaboradores do banco de dados RH em lote">
+            <i class="fas fa-file-import"></i> Importar do RH
+          </button>
+          <button class="btn-primary" onclick="openAddEmployee()">
+            <i class="fas fa-plus"></i> Novo Funcionário
+          </button>
+        </div>
+      </div>
+      <div id="emp-no-rh-warning" class="emp-no-rh-warning" style="display:none"></div>
+      <div class="search-bar">
+        <i class="fas fa-search"></i>
+        <input type="text" id="search-employees" placeholder="Buscar funcionário..." oninput="renderEmployeesTable()" />
+      </div>
+      <div class="table-wrapper">
+        <table class="data-table" id="employees-table">
+          <thead>
+            <tr>
+              <th>Funcionário</th>
+              <th>Cargo Atual → Desejado</th>
+              <th>Tempo de Casa</th>
+              <th>Progresso</th>
+              <th>Status</th>
+              <th>Ações</th>
+            </tr>
+          </thead>
+          <tbody id="employees-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- ADMIN: TRILHA DE CARREIRA -->
+    <div id="page-admin-careers" class="page-section page-admin-careers hidden">
+      <div class="page-header career-trail-header">
+        <div class="career-trail-title-block">
+          <h2><i class="fas fa-sitemap"></i> Trilha de Carreira</h2>
+          <span class="page-sub career-trail-sub">Cargos por nível e requisitos — Setor de Produção</span>
+        </div>
+        <button class="btn-primary career-trail-btn-new" type="button" onclick="openAddCareer()">
+          <i class="fas fa-plus"></i> Novo Cargo
+        </button>
+      </div>
+      <div class="career-trail-visual">
+        <div id="career-trail-flow"></div>
+      </div>
+      <details class="career-trail-table-details">
+        <summary class="career-trail-table-summary">Lista completa em tabela (opcional)</summary>
+        <div class="career-trail-table-wrap table-wrapper">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Cargo</th>
+                <th>Tempo Mínimo (meses)</th>
+                <th>Competências</th>
+                <th>Ações</th>
+              </tr>
+            </thead>
+            <tbody id="careers-tbody"></tbody>
+          </table>
+        </div>
+      </details>
+    </div>
+
+    <!-- ADMIN: POR SUPERVISOR -->
+    <div id="page-admin-supervisors" class="page-section hidden">
+      <div class="page-header">
+        <h2><i class="fas fa-user-tie"></i> Acompanhamento por Supervisor</h2>
+        <span class="page-sub">Eficiência de cada equipe — visão hierárquica completa</span>
+      </div>
+      <div id="sup-overview-kpis" class="sup-ov-kpis-grid"></div>
+      <div class="sup-ov-toolbar">
+        <div class="sup-ov-search-wrap">
+          <i class="fas fa-search"></i>
+          <input type="text" id="sup-ov-search" placeholder="Buscar supervisor ou funcionário..." oninput="filterSupOverview()" />
+        </div>
+        <select id="sup-ov-sort" onchange="filterSupOverview()" class="sup-ov-select">
+          <option value="name">Ordenar: Nome</option>
+          <option value="team">Ordenar: Tamanho da Equipe</option>
+          <option value="pending">Ordenar: Pendências</option>
+          <option value="efficiency">Ordenar: Eficiência</option>
+        </select>
+      </div>
+      <div id="supervisors-overview-list"></div>
+    </div>
+
+    <!-- ADMIN: AVALIAÇÕES -->
+    <div id="page-admin-evaluations" class="page-section hidden">
+      <div class="page-header">
+        <h2><i class="fas fa-clipboard-list"></i> Histórico de Avaliações</h2>
+        <button class="btn-outline" onclick="printEvaluations()">
+          <i class="fas fa-print"></i> Imprimir
+        </button>
+      </div>
+      <div id="evaluations-list" class="evaluations-container"></div>
+    </div>
+
+    <!-- ADMIN: MATRIZ DE POLIVALÊNCIA -->
+    <div id="page-admin-matrix" class="page-section hidden">
+      <div class="page-header">
+        <h2><i class="fas fa-th"></i> Matriz de Polivalência</h2>
+        <div class="matrix-filters">
+          <select id="matrix-sector-filter" onchange="renderMatrix()">
+            <option value="">Todos os Setores</option>
+          </select>
+        </div>
+      </div>
+      <div class="matrix-legend">
+        <span class="leg-item"><span class="leg-dot red"></span> Não Treinado</span>
+        <span class="leg-item"><span class="leg-dot yellow"></span> Em Treinamento</span>
+        <span class="leg-item"><span class="leg-dot green"></span> Competente</span>
+        <span class="leg-item"><span class="leg-dot star"></span> Referência</span>
+      </div>
+      <div class="matrix-wrapper">
+        <div id="matrix-container"></div>
+      </div>
+    </div>
+
+    <!-- ADMIN: RELATÓRIOS -->
+    <div id="page-admin-reports" class="page-section hidden">
+      <div class="page-header">
+        <h2><i class="fas fa-chart-bar"></i> Relatórios</h2>
+        <button class="btn-outline" onclick="window.print()">
+          <i class="fas fa-print"></i> Imprimir Relatório
+        </button>
+      </div>
+      <div class="reports-grid">
+        <div class="chart-card">
+          <h3><i class="fas fa-chart-pie"></i> Distribuição por Status</h3>
+          <div style="height:240px; position:relative;">
+            <canvas id="chart-pie-status"></canvas>
+          </div>
+        </div>
+        <div class="chart-card">
+          <h3><i class="fas fa-chart-bar"></i> Avaliações por Resultado</h3>
+          <div style="height:240px; position:relative;">
+            <canvas id="chart-eval-result"></canvas>
+          </div>
+        </div>
+      </div>
+      <div class="report-table-card">
+        <h3><i class="fas fa-list"></i> Resumo por Funcionário</h3>
+        <div class="table-wrapper">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>Funcionário</th>
+                <th>Cargo Atual</th>
+                <th>Cargo Desejado</th>
+                <th>Tempo de Casa</th>
+                <th>Última Avaliação</th>
+                <th>Resultado</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody id="report-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- SUPERVISOR: HOME -->
+    <div id="page-supervisor-home" class="page-section hidden">
+      <div class="page-header">
+        <h2><i class="fas fa-home"></i> Meu Painel</h2>
+        <span class="page-sub" id="supervisor-greeting">Olá, Supervisor!</span>
+      </div>
+      <div id="supervisor-alert" class="alert-banner hidden">
+        <i class="fas fa-bell"></i>
+        <span id="supervisor-alert-text"></span>
+      </div>
+      <div class="cards-grid-2">
+        <div class="stat-card blue"><div class="stat-icon"><i class="fas fa-users"></i></div><div class="stat-info"><span class="stat-value" id="sup-stat-total">0</span><span class="stat-label">Minha Equipe</span></div></div>
+        <div class="stat-card orange"><div class="stat-icon"><i class="fas fa-clipboard-check"></i></div><div class="stat-info"><span class="stat-value" id="sup-stat-pending">0</span><span class="stat-label">Aguardam Avaliação</span></div></div>
+      </div>
+      <h3 class="section-title"><i class="fas fa-user-clock"></i> Funcionários Aptos para Avaliação</h3>
+      <div id="sup-eligible-list" class="employee-cards-list"></div>
+      <h3 class="section-title mt-20"><i class="fas fa-users"></i> Toda a Equipe</h3>
+      <div id="sup-all-list" class="employee-cards-list"></div>
+      <div class="promo-shortcut-banner" id="promo-shortcut-banner-container" onclick="navigateTo('supervisor-promo-history')" style="margin-top:20px;display:none">
+        <div class="promo-shortcut-content">
+          <i class="fas fa-rocket"></i>
+          <span><strong><span id="promo-pipeline-count">0</span> promoção(ões)</strong> em andamento — clique para ver o histórico</span>
+        </div>
+        <i class="fas fa-chevron-right"></i>
+      </div>
+    </div>
+
+    <!-- SUPERVISOR: EQUIPE -->
+    <div id="page-supervisor-employees" class="page-section hidden">
+      <div class="page-header">
+        <h2><i class="fas fa-users"></i> Minha Equipe</h2>
+        <button class="btn-outline" onclick="openExceptionRequest()">
+          <i class="fas fa-paper-plane"></i> Solicitar Exceção
+        </button>
+      </div>
+      <div class="search-bar">
+        <i class="fas fa-search"></i>
+        <input type="text" id="search-sup-employees" placeholder="Buscar funcionário..." oninput="renderSupervisorTeam()" />
+      </div>
+      <div class="table-wrapper">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Funcionário</th>
+              <th>Cargo Atual → Desejado</th>
+              <th>Tempo de Casa</th>
+              <th>Progresso</th>
+              <th>Status</th>
+              <th>Ações</th>
+            </tr>
+          </thead>
+          <tbody id="sup-employees-tbody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- SUPERVISOR: FREQUÊNCIA DA EQUIPE -->
+    <div id="page-supervisor-team-attendance" class="page-section hidden">
+      <div class="page-header">
+        <h2><i class="fas fa-clipboard-check"></i> Frequência da Equipe</h2>
+        <span class="page-sub">Lançamento diário por colaborador — um documento por dia e equipe</span>
+      </div>
+      <div class="da-toolbar">
+        <div class="form-group da-date-field">
+          <label for="da-attendance-date">Data</label>
+          <input type="date" id="da-attendance-date" />
+        </div>
+      </div>
+      <p id="da-doc-hint" class="page-sub da-doc-hint"></p>
+      <div class="table-wrapper">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Colaborador</th>
+              <th>Situação do dia</th>
+            </tr>
+          </thead>
+          <tbody id="da-attendance-tbody"></tbody>
+        </table>
+      </div>
+      <div class="da-save-row">
+        <button type="button" class="btn-primary" id="da-save-btn"><i class="fas fa-save"></i> Salvar frequência do dia</button>
+      </div>
+    </div>
+
+    <!-- SUPERVISOR: HISTÓRICO DE PROMOÇÕES -->
+    <div id="page-supervisor-promo-history" class="page-section hidden">
+      <div class="page-header">
+        <h2><i class="fas fa-rocket"></i> Histórico de Promoções</h2>
+        <span class="page-sub">Jornada da minha equipe</span>
+      </div>
+      <div class="promo-kpis" id="sup-promo-kpis"></div>
+      <div class="promo-charts-row">
+        <div class="promo-chart-box">
+          <h4><i class="fas fa-chart-bar"></i> Para onde foram os Ajudantes?</h4>
+          <p class="promo-chart-sub">Cargos de destino dos promovidos</p>
+          <div id="sup-promo-dest-chart" class="promo-dest-chart"></div>
+        </div>
+        <div class="promo-chart-box">
+          <h4><i class="fas fa-history"></i> Linha do Tempo</h4>
+          <p class="promo-chart-sub">Últimas promoções da equipe</p>
+          <div id="sup-promo-timeline" class="promo-timeline-list"></div>
+        </div>
+      </div>
+      <div class="promo-table-box">
+        <div class="promo-table-header">
+          <h4><i class="fas fa-list-alt"></i> Detalhamento</h4>
+          <span id="sup-promo-table-count" class="promo-count-badge">0 registros</span>
+        </div>
+        <div id="sup-promo-detail-table"></div>
+      </div>
+    </div>
+
+    <!-- SUPERVISOR: EXCEÇÕES -->
+    <div id="page-supervisor-excecoes" class="page-section hidden">
+      <div class="page-header">
+        <h2><i class="fas fa-paper-plane"></i> Minhas Solicitações de Exceção</h2>
+        <button class="btn-primary" onclick="openExceptionRequest()">
+          <i class="fas fa-plus"></i> Nova Solicitação
+        </button>
+      </div>
+      <div id="sup-excecoes-list"></div>
+    </div>
+
+    <!-- GERENTE: APROVAR EXCEÇÕES -->
+    <div id="page-manager-excecoes" class="page-section hidden">
+      <div class="page-header">
+        <h2><i class="fas fa-shield-alt"></i> Aprovar Solicitações de Exceção</h2>
+        <span class="page-sub">Avaliações antecipadas solicitadas pelos supervisores</span>
+      </div>
+      <div id="mgr-excecoes-list"></div>
+    </div>
+
+    <!-- GERENTE: APROVAR PROMOÇÕES -->
+    <div id="page-manager-promo-approvals" class="page-section hidden">
+      <div class="page-header">
+        <h2><i class="fas fa-user-check"></i> Aprovar Promoções</h2>
+        <span class="page-sub">Promoções aguardando sua revisão antes de ir ao Diretor</span>
+      </div>
+      <div id="mgr-promo-list"></div>
+    </div>
+
+    <!-- DIRETOR: DASHBOARD -->
+    <div id="page-boss-dashboard" class="page-section hidden">
+      <div class="page-header">
+        <h2><i class="fas fa-crown"></i> Painel do Diretor</h2>
+        <span class="page-sub">Visão geral estratégica — Lumini</span>
+      </div>
+      <div id="boss-urgent-alert" class="alert-banner urgent hidden">
+        <i class="fas fa-exclamation-circle"></i>
+        <span><strong><span id="boss-urgent-count">0</span> promoção(ões)</strong> aguardando sua aprovação final!</span>
+        <button class="alert-action-btn" onclick="navigateTo('boss-promo-approvals')">Ver Agora</button>
+      </div>
+      <div class="cards-grid">
+        <div class="stat-card blue"><div class="stat-icon"><i class="fas fa-users"></i></div><div class="stat-info"><span class="stat-value" id="boss-kpi-total">0</span><span class="stat-label">Colaboradores</span></div></div>
+        <div class="stat-card orange"><div class="stat-icon"><i class="fas fa-hourglass-half"></i></div><div class="stat-info"><span class="stat-value" id="boss-kpi-progress">0</span><span class="stat-label">Em Promoção</span></div></div>
+        <div class="stat-card yellow"><div class="stat-icon"><i class="fas fa-crown"></i></div><div class="stat-info"><span class="stat-value" id="boss-kpi-await">0</span><span class="stat-label">Aguardam Decisão</span></div></div>
+        <div class="stat-card green"><div class="stat-icon"><i class="fas fa-trophy"></i></div><div class="stat-info"><span class="stat-value" id="boss-kpi-promoted">0</span><span class="stat-label">Promovidos</span></div></div>
+      </div>
+      <div class="cards-grid" style="margin-top:12px">
+        <div class="stat-card purple"><div class="stat-icon"><i class="fas fa-clipboard-list"></i></div><div class="stat-info"><span class="stat-value" id="boss-kpi-evals">0</span><span class="stat-label">Avaliações Feitas</span></div></div>
+        <div class="stat-card teal"><div class="stat-icon"><i class="fas fa-clock"></i></div><div class="stat-info"><span class="stat-value" id="boss-kpi-apt">0</span><span class="stat-label">Aptos p/ Avaliação</span></div></div>
+      </div>
+      <div class="dashboard-row dashboard-row-charts">
+        <div class="chart-card">
+          <h3><i class="fas fa-layer-group"></i> Por Equipe</h3>
+          <div style="height:220px; position:relative;">
+            <canvas id="boss-chart-team"></canvas>
+          </div>
+        </div>
+        <div class="chart-card">
+          <h3><i class="fas fa-chart-pie"></i> Por Status</h3>
+          <div style="height:220px; position:relative;">
+            <canvas id="boss-chart-status"></canvas>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:20px">
+        <button class="btn-primary" onclick="navigateTo('boss-promo-approvals')" style="width:100%;padding:16px;font-size:16px">
+          <i class="fas fa-trophy"></i> Ver Promoções Aguardando Aprovação Final
+          <span id="boss-kpi-await-btn"></span>
+        </button>
+      </div>
+    </div>
+
+    <!-- DIRETOR: APROVAÇÃO FINAL -->
+    <div id="page-boss-promo-approvals" class="page-section hidden">
+      <div class="page-header">
+        <h2><i class="fas fa-trophy"></i> Aprovação Final de Promoções</h2>
+        <span class="page-sub">Decisão do Diretor — aprovação ou reprovação definitiva</span>
+      </div>
+      <div id="boss-promo-list"></div>
+    </div>
+
+    <!-- RH: DASHBOARD -->
+    <div id="page-rh-dashboard" class="page-section hidden"></div>
+
+    <!-- RH: COLABORADORES -->
+    <div id="page-rh-employees" class="page-section hidden"></div>
+
+    <!-- RH: TURNOVER -->
+    <div id="page-rh-turnover" class="page-section hidden"></div>
+
+    <!-- RH: PROMOÇÕES HOMOLOGADAS -->
+    <div id="page-rh-promocoes" class="page-section hidden"></div>
+
+    <!-- RH: PUBLICAR HOLERITE -->
+    <div id="page-rh-holerites" class="page-section hidden"></div>
+
+    <!-- ADMIN: RH DASHBOARD (alias) -->
+    <div id="page-admin-rh-dashboard" class="page-section hidden"></div>
+
+    <!-- ADMIN: RH COLABORADORES (alias) -->
+    <div id="page-admin-rh-employees" class="page-section hidden"></div>
+
+    <!-- ADMIN: RH TURNOVER (alias) -->
+    <div id="page-admin-rh-turnover" class="page-section hidden"></div>
+
+    <!-- ADMIN: RH PUBLICAR HOLERITE -->
+    <div id="page-admin-rh-holerites" class="page-section hidden"></div>
+
+    <!-- BOSS: RH DASHBOARD (somente leitura) -->
+    <div id="page-boss-rh-dashboard" class="page-section hidden"></div>
+
+    <!-- BOSS: RH TURNOVER (somente leitura) -->
+    <div id="page-boss-rh-turnover" class="page-section hidden"></div>
+
+    <!-- ADMIN: EQUIPES DE PRODUÇÃO -->
+    <div id="page-admin-teams" class="page-section hidden"></div>
+
+    <!-- BOSS: EQUIPES DE PRODUÇÃO (somente leitura) -->
+    <div id="page-boss-teams" class="page-section hidden"></div>
+
+    <!-- SUPERVISOR: EQUIPES DE PRODUÇÃO -->
+    <div id="page-supervisor-teams" class="page-section hidden"></div>
+
+    <!-- GERENTE: EQUIPES DE PRODUÇÃO -->
+    <div id="page-manager-teams" class="page-section hidden"></div>
+
+    <!-- COMPRAS -->
+    <div id="page-purchases" class="page-section hidden"></div>
+
+    <!-- ADMIN: USUÁRIOS & PERMISSÕES -->
+    <div id="page-admin-users" class="page-section hidden"></div>
+
+    <!-- COMUNICADOS -->
+    <div id="page-comms" class="page-section hidden">
+      <div class="page-header">
+        <div>
+          <h2><i class="fas fa-bullhorn"></i> Comunicação Interna</h2>
+          <span class="page-sub">Central de comunicados corporativos — envio formal e direcionado</span>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn-primary" id="comms-btn-new" onclick="window._commsOpenNew && window._commsOpenNew()">
+            <i class="fas fa-plus"></i> Novo comunicado
+          </button>
+        </div>
+      </div>
+
+      <!-- Resumo -->
+      <div id="comms-kpis" class="cards-grid" style="margin-bottom:16px"></div>
+
+      <!-- Barra de filtros e busca -->
+      <div class="comms-toolbar">
+        <div class="comms-filters" role="tablist" aria-label="Filtros de comunicados">
+          <button class="comms-filter-chip active" data-filter="all" onclick="window._commsSetFilter && window._commsSetFilter('all')">
+            Todos
+          </button>
+          <button class="comms-filter-chip" data-filter="unread" onclick="window._commsSetFilter && window._commsSetFilter('unread')">
+            Não lidos
+          </button>
+          <button class="comms-filter-chip" data-filter="high" onclick="window._commsSetFilter && window._commsSetFilter('high')">
+            Alta prioridade
+          </button>
+          <button class="comms-filter-chip" data-filter="mine" onclick="window._commsSetFilter && window._commsSetFilter('mine')">
+            Enviados por mim
+          </button>
+        </div>
+
+        <div class="search-bar" style="margin:0;flex:1;min-width:220px">
+          <i class="fas fa-search"></i>
+          <input type="text" id="comms-search" placeholder="Buscar por título, mensagem, remetente..." oninput="window._commsRender && window._commsRender()" />
+        </div>
+      </div>
+
+      <!-- Lista -->
+      <div id="comms-list" style="margin-top:12px"></div>
+    </div>
+
+  </main>
+</div>
+
+<!-- Scripts -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="js/data.js"></script>
+<script src="js/rh-data.js"></script>
+<script type="module" src="js/firebase-db.js"></script>
+<script src="js/app.js"></script>
+<script src="js/daily-attendance-module.js"></script>
+<script src="js/rh-module.js"></script>
+<script src="js/rh-holerites-module.js"></script>
+<script src="js/teams-module.js"></script>
+<script src="js/onboarding.js"></script>
+<script src="js/permissions.js"></script>
+<script src="js/purchases-module.js"></script>
+<script src="js/users-module.js"></script>
+<script src="js/comms-module.js"></script>
+<script src="js/notifications-module.js"></script>
+
+</body>
+</html>

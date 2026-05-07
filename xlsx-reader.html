@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8"/>
+<title>Leitor XLSX - RH Lumini</title>
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<style>
+  body { font-family: monospace; font-size: 12px; padding: 20px; background: #111; color: #0f0; }
+  #output { white-space: pre; overflow: auto; max-height: 90vh; }
+  button { padding: 10px 20px; margin: 10px; cursor: pointer; font-size: 14px; }
+</style>
+</head>
+<body>
+<h2 style="color:white">Extrator XLSX — RH Lumini</h2>
+<button onclick="loadFile()">📂 Carregar Rh.Lumini.xlsx</button>
+<button onclick="copyOutput()">📋 Copiar JSON</button>
+<div id="output">Clique em "Carregar" para processar o arquivo...</div>
+
+<script>
+let jsonResult = '';
+
+async function loadFile() {
+  const out = document.getElementById('output');
+  out.textContent = 'Carregando...';
+  try {
+    const resp = await fetch('Rh.Lumini.xlsx');
+    const buf  = await resp.arrayBuffer();
+    const wb   = XLSX.read(buf, { type: 'array', cellDates: true });
+    const ws   = wb.Sheets[wb.SheetNames[0]];
+    const rows = XLSX.utils.sheet_to_json(ws, { raw: false, dateNF: 'yyyy-mm-dd' });
+
+    out.textContent = `Total de linhas: ${rows.length}\n\nColunas: ${Object.keys(rows[0]||{}).join(' | ')}\n\n`;
+
+    // Monta JSON formatado
+    const result = rows.map((r, i) => {
+      // Tenta mapear colunas pelo nome (flexível)
+      const keys = Object.keys(r);
+      const get = (patterns) => {
+        for (const p of patterns) {
+          const k = keys.find(k => k.toUpperCase().includes(p.toUpperCase()));
+          if (k && r[k] !== undefined && r[k] !== '') return String(r[k]).trim();
+        }
+        return '';
+      };
+
+      // Formata data YYYY-MM-DD
+      const fmtDate = (v) => {
+        if (!v || v === '' || v === '0' || v === 'undefined') return '';
+        // já está como string de data
+        const s = String(v).trim();
+        // tenta dd/mm/yyyy
+        const m1 = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+        if (m1) return `${m1[3]}-${m1[2].padStart(2,'0')}-${m1[1].padStart(2,'0')}`;
+        // tenta yyyy-mm-dd
+        const m2 = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+        if (m2) return `${m2[1]}-${m2[2].padStart(2,'0')}-${m2[3].padStart(2,'0')}`;
+        // tenta mm/dd/yyyy (Excel US)
+        const m3 = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+        if (m3) return `${m3[3]}-${m3[1].padStart(2,'0')}-${m3[2].padStart(2,'0')}`;
+        return s;
+      };
+
+      const mat     = get(['MATR','MAT']);
+      const nome    = get(['COLAB','NOME','NAME']);
+      const sit     = get(['SITUA','STATUS','SIT']);
+      const jornada = get(['JORNA','JORN']);
+      const matriz  = get(['MATRIZ','UNID','UNIT']);
+      const cargo   = get(['CARGO','FUNCAO','FUNÇÃO','ROLE']);
+      const horario = get(['HORÁR','HORAR','HORA']);
+      const lider   = get(['LÍDER','LIDER','LIDERAN','GESTOR','SUPER']);
+      const adm     = fmtDate(get(['ADMISS','ENTRADA','INICIO']));
+      const dias    = get(['DIAS','PERIOD']);
+      const dem     = fmtDate(get(['DEMISS','SAIDA','SAÍDA','DESLI']));
+      const tipoEx  = get(['TIPO DE EX','TIPO EX','EXAM TYPE']);
+      const dataEx  = fmtDate(get(['DATA DO EX','DATA EX','EXAM DATE']));
+      const tel     = get(['TELEF','FONE','PHONE','CELUL']);
+      const nasc    = fmtDate(get(['NASCI','BIRTH','DATA NASC']));
+
+      return { mat, nome, sit, jornada, matriz, cargo, horario, lider, adm, dias, dem, tipoEx, dataEx, tel, nasc };
+    });
+
+    jsonResult = JSON.stringify(result, null, 2);
+    out.textContent = `Total: ${result.length} colaboradores\n\n` + jsonResult;
+    // Log em partes para não truncar
+    console.log('TOTAL:', result.length);
+    // Log linha por linha compacto
+    result.slice(99).forEach((r,i) => {
+      console.log(`ROW|${i+99}|${r.mat}|${r.nome}|${r.sit}|${r.jornada}|${r.matriz}|${r.cargo}|${r.horario}|${r.lider}|${r.adm}|${r.dias}|${r.dem}|${r.tipoEx}|${r.dataEx}|${r.tel}|${r.nasc}`);
+    });
+  } catch(e) {
+    out.textContent = 'ERRO: ' + e.message + '\n' + e.stack;
+  }
+}
+
+// Auto-load
+window.addEventListener('load', () => setTimeout(loadFile, 500));
+
+function copyOutput() {
+  navigator.clipboard.writeText(jsonResult).then(() => alert('JSON copiado!')).catch(() => {
+    const ta = document.createElement('textarea');
+    ta.value = jsonResult;
+    document.body.appendChild(ta);
+    ta.select();
+    document.execCommand('copy');
+    document.body.removeChild(ta);
+    alert('Copiado!');
+  });
+}
+</script>
+</body>
+</html>

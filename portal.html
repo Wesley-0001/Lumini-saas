@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="pt-BR" translate="no">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="google" content="notranslate" />
+  <title>Lumini — Portal do Colaborador</title>
+  <link rel="icon" type="image/png" href="images/logo-black.png" />
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/portal.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700&family=Sora:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <div id="portal-app-root">
+
+    <!-- Loading inicial (Firestore) -->
+    <div id="portal-loading" class="firebase-loading-screen">
+      <div class="firebase-loading-box">
+        <img src="images/logo-white.png" alt="Lumini" style="height:52px;margin-bottom:24px;opacity:0.95" />
+        <div class="firebase-spinner"></div>
+        <p class="firebase-loading-text">Conectando ao portal...</p>
+        <p class="firebase-loading-sub">Aguarde um momento</p>
+      </div>
+    </div>
+
+    <!-- Login -->
+    <div id="portal-login" class="page active" style="display:none">
+      <div class="login-bg">
+        <div class="stamps-container" aria-hidden="true">
+          <div class="stamp-float stamp-tl" data-ref="AD0901" style="--size:145px;--dur:7s;--delay:0s;--rot:-14deg">
+            <div class="stamp-img-wrap"><img src="images/stamp-1.jpg" alt="" draggable="false" /></div>
+            <div class="stamp-ref">AD0901</div>
+          </div>
+          <div class="stamp-float stamp-ml" data-ref="AD1341" style="--size:140px;--dur:8s;--delay:-3s;--rot:8deg">
+            <div class="stamp-img-wrap"><img src="images/stamp-2.jpg" alt="" draggable="false" /></div>
+            <div class="stamp-ref">AD1341</div>
+          </div>
+          <div class="stamp-float stamp-bl" data-ref="NT8479" style="--size:138px;--dur:10s;--delay:-1s;--rot:-10deg">
+            <div class="stamp-img-wrap"><img src="images/stamp-3.jpg" alt="" draggable="false" /></div>
+            <div class="stamp-ref">NT8479</div>
+          </div>
+          <div class="stamp-float stamp-tr" data-ref="NT8023" style="--size:148px;--dur:9s;--delay:-2s;--rot:11deg">
+            <div class="stamp-img-wrap"><img src="images/stamp-4.jpg" alt="" draggable="false" /></div>
+            <div class="stamp-ref">NT8023</div>
+          </div>
+          <div class="stamp-float stamp-mr" data-ref="AD2339" style="--size:135px;--dur:11s;--delay:-5s;--rot:6deg">
+            <div class="stamp-img-wrap"><img src="images/stamp-5.jpg" alt="" draggable="false" /></div>
+            <div class="stamp-ref">AD2339</div>
+          </div>
+          <div class="stamp-float stamp-br" data-ref="NT6785" style="--size:142px;--dur:8.5s;--delay:-4s;--rot:-8deg">
+            <div class="stamp-img-wrap"><img src="images/stamp-6.jpg" alt="" draggable="false" /></div>
+            <div class="stamp-ref">NT6785</div>
+          </div>
+        </div>
+
+        <div class="login-card portal-login-card">
+          <div class="login-logo">
+            <div class="logo-icon">
+              <img src="images/logo-white.png" alt="Lumini" style="object-fit:contain;width:100%;height:100%" />
+            </div>
+            <h1 class="hero-title">Portal do Colaborador</h1>
+            <p class="display-text">Acesso exclusivo para colaboradores cadastrados</p>
+          </div>
+          <div id="portal-login-error" class="login-error" style="display:none"></div>
+          <form id="portal-login-form" class="login-form" autocomplete="on">
+            <div class="form-group">
+              <label for="portal-email"><i class="fas fa-envelope"></i> E-mail corporativo</label>
+              <input type="email" id="portal-email" name="email" placeholder="seu.email@empresa.com" required />
+            </div>
+            <div class="form-group">
+              <label for="portal-password"><i class="fas fa-lock"></i> Senha</label>
+              <input type="password" id="portal-password" name="password" placeholder="••••••••" required />
+            </div>
+            <button type="submit" class="btn-primary btn-full" id="portal-btn-submit">
+              <i class="fas fa-sign-in-alt"></i> Entrar
+            </button>
+          </form>
+          <p class="portal-login-footnote">
+            Problemas com acesso? Fale com o RH ou administrador do sistema.
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Área logada -->
+    <div id="portal-home" style="display:none">
+      <div class="portal-home-ambient" aria-hidden="true">
+        <div class="portal-orb portal-orb--tl"></div>
+        <div class="portal-orb portal-orb--tr"></div>
+        <div class="portal-orb portal-orb--bl"></div>
+        <div class="portal-orb portal-orb--br"></div>
+      </div>
+      <div class="portal-shell">
+        <div class="portal-topbar">
+          <div>
+            <h1><i class="fas fa-id-card-alt portal-topbar-icon"></i> Portal do Colaborador</h1>
+            <div class="portal-sub">Lumini — informações do seu vínculo</div>
+          </div>
+          <button type="button" class="btn-outline" id="portal-btn-logout">
+            <i class="fas fa-sign-out-alt"></i> Sair
+          </button>
+        </div>
+
+        <div class="portal-welcome" id="portal-welcome-block">
+          <h2 id="portal-welcome-title">Olá!</h2>
+          <p id="portal-welcome-text">Carregando seus dados...</p>
+        </div>
+
+        <div class="portal-card-grid" id="portal-cards">
+          <div class="portal-info-card">
+            <div class="label"><i class="fas fa-user" style="margin-right:6px"></i>Nome</div>
+            <div class="value" id="portal-val-name">—</div>
+          </div>
+          <div class="portal-info-card">
+            <div class="label"><i class="fas fa-briefcase" style="margin-right:6px"></i>Cargo</div>
+            <div class="value" id="portal-val-role">—</div>
+          </div>
+          <div class="portal-info-card">
+            <div class="label"><i class="fas fa-users" style="margin-right:6px"></i>Equipe</div>
+            <div class="value" id="portal-val-team">—</div>
+            <div class="hint" id="portal-val-team-hint"></div>
+          </div>
+        </div>
+
+        <section class="portal-section portal-evaluations" aria-labelledby="portal-eval-heading">
+          <h2 id="portal-eval-heading" class="portal-section-title">
+            <i class="fas fa-clipboard-check" aria-hidden="true"></i> Minhas Avaliações
+          </h2>
+          <p class="portal-section-lead" id="portal-eval-lead">
+            Acompanhe o andamento do processo e o histórico de avaliações de desempenho vinculadas ao seu cadastro.
+          </p>
+          <div id="portal-eval-pipeline" class="portal-eval-pipeline" hidden></div>
+          <div id="portal-eval-list" class="portal-eval-list" role="list"></div>
+          <div id="portal-eval-empty" class="portal-eval-empty" hidden></div>
+        </section>
+
+        <section class="portal-section portal-holerites" aria-labelledby="portal-hol-heading">
+          <h2 id="portal-hol-heading" class="portal-section-title">
+            <i class="fas fa-file-invoice-dollar" aria-hidden="true"></i> Meus Holerites
+          </h2>
+          <p class="portal-section-lead" id="portal-hol-lead">
+            Documentos de pagamento publicados pelo RH e vinculados ao seu cadastro (somente leitura).
+          </p>
+          <div id="portal-hol-list" class="portal-hol-list" role="list"></div>
+          <div id="portal-hol-empty" class="portal-hol-empty" hidden></div>
+        </section>
+
+        <section class="portal-section portal-frequencia" aria-labelledby="portal-freq-heading">
+          <h2 id="portal-freq-heading" class="portal-section-title">
+            <i class="fas fa-calendar-check" aria-hidden="true"></i> Minha Frequência
+          </h2>
+          <p class="portal-section-lead" id="portal-freq-lead">
+            Calendário mensual com a frequência registrada pela supervisão (coleção diária), vinculada ao seu cadastro (somente leitura).
+          </p>
+          <div id="portal-freq-wrap" class="portal-freq-wrap">
+            <div class="portal-freq-toolbar">
+              <button type="button" class="portal-freq-nav-btn" id="portal-freq-btn-prev" aria-label="Mês anterior">
+                <i class="fas fa-chevron-left" aria-hidden="true"></i>
+              </button>
+              <h3 class="portal-freq-month-title" id="portal-freq-month-label">—</h3>
+              <button type="button" class="portal-freq-nav-btn" id="portal-freq-btn-next" aria-label="Próximo mês">
+                <i class="fas fa-chevron-right" aria-hidden="true"></i>
+              </button>
+            </div>
+            <div id="portal-freq-legend" class="portal-freq-legend"></div>
+            <div id="portal-freq-calendar" class="portal-freq-calendar" role="grid" aria-labelledby="portal-freq-month-label"></div>
+            <p id="portal-freq-detail" class="portal-freq-detail" hidden role="status"></p>
+            <div id="portal-freq-empty" class="portal-freq-empty" hidden></div>
+          </div>
+        </section>
+
+        <a class="portal-link-main" href="index.html">
+          <i class="fas fa-arrow-left"></i> Voltar ao sistema principal
+        </a>
+      </div>
+    </div>
+
+  </div>
+
+  <script defer src="js/portal-stamps.js"></script>
+  <script type="module" src="js/portal-app.js"></script>
+</body>
+</html>
