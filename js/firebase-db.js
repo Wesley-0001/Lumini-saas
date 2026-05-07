@@ -46,8 +46,19 @@ window._dbReady = false;
 
 let _ntInAppUnsub = null;
 
-// ─── Planilha local Rh.Lumini.xlsx (mesma lógica que xlsx-reader.html) ──
+// ─── Fonte RH local: CSV (prioritário) ou XLSX ──
+const _LUMINI_CSV_DEFAULT = 'Rh.Lumini.csv';
 const _LUMINI_XLSX_DEFAULT = 'Rh.Lumini.xlsx';
+
+/** Chave estável para filtro de equipe (coluna LÍDER): sem acentos, maiúsculas. */
+function _normalizeLiderKey(s) {
+  return String(s == null ? '' : s)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+    .toUpperCase();
+}
+window._ntNormalizeLiderKey = _normalizeLiderKey;
 
 function _luminiFmtDate(v) {
   if (v == null || v === '' || v === '0' || v === 'undefined') return '';
@@ -91,19 +102,33 @@ function _luminiRawRowToFields(r) {
   const dataEx  = _luminiFmtDate(get(['DATA DO EX', 'DATA EX', 'EXAM DATE']));
   const tel     = get(['TELEF', 'FONE', 'PHONE', 'CELUL']);
   const nasc    = _luminiFmtDate(get(['NASCI', 'BIRTH', 'DATA NASC']));
+  const email   = get(['E-MAIL', 'EMAIL', 'E MAIL', 'MAIL']);
 
-  return { mat, nome, sit, jornada, matriz, cargo, horario, lider, adm, dias, dem, tipoEx, dataEx, tel, nasc };
+  return { mat, nome, sit, jornada, matriz, cargo, horario, lider, adm, dias, dem, tipoEx, dataEx, tel, nasc, email };
 }
 
 /** Converte registro Lumini (campos já extraídos) para o formato employee do app. */
 function _luminiFieldsToEmployee(f, index) {
   const mat = f.mat ? String(f.mat).replace(/\s+/g, '').trim() : '';
   const nome = (f.nome || '').trim();
-  const id = mat ? `rh-${mat}` : `lumini-row-${index}`;
+  const id = mat || `lumini-row-${index}`;
 
   let promoObs = '';
   if (f.sit && String(f.sit).trim()) promoObs = `[RH] ${String(f.sit).trim()}`;
   if (f.dem) promoObs = (promoObs ? promoObs + ' · ' : '') + `Demissão: ${f.dem}`;
+
+  const rhHorario = (f.horario || '').trim();
+  const m = rhHorario.match(/(\d{1,2})\s*[:h]\s*(\d{2})?/i) || rhHorario.match(/\b(\d{1,2})\b/);
+  const startHour = m ? Math.max(0, Math.min(23, parseInt(m[1], 10))) : null;
+  const shift =
+    startHour == null ? null :
+    startHour < 12 ? 'manha' :
+    startHour < 18 ? 'tarde' : 'noite';
+
+  const liderRaw = (f.lider || '').trim();
+  const supervisorKey = liderRaw ? _normalizeLiderKey(liderRaw) : '';
+  const diasStr = f.dias != null ? String(f.dias).replace(/\D/g, '') : '';
+  const rhDiasContrato = diasStr ? (parseInt(diasStr, 10) || 0) : 0;
 
   return {
     id,
@@ -114,12 +139,101 @@ function _luminiFieldsToEmployee(f, index) {
     currentRole: (f.cargo || '').trim() || 'Ajudante de Produção',
     desiredRole: null,
     minMonths: null,
-    supervisor: '',
-    rhLider: (f.lider || '').trim(),
+    supervisor: supervisorKey,
+    rhLider: liderRaw,
+    rhSituacao: (f.sit || '').trim() || 'ATIVO',
+    rhJornada: ((f.jornada || '').trim() || (f.sit || '').trim() || ''),
+    rhDiasContrato,
+    rhDemissao: f.dem || '',
+    rhNascimento: f.nasc || '',
+    rhTelefone: (f.tel || '').trim(),
+    rhHorario: rhHorario || null,
+    rhEmail: String(f.email || '').trim().toLowerCase(),
+    shift: shift || null,
     status: 'registered',
     promoObs,
     skills: {}
   };
+}
+
+function parseRhLuminiCsvToRows(csvText) {
+  const text = String(csvText || '').replace(/^\uFEFF/, '');
+  const lines = text.split(/\r?\n/).filter(line => line.length);
+  if (!lines.length) return [];
+  const delim = ';';
+  const headers = lines[0].split(delim).map(h => h.trim());
+  const out = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cells = lines[i].split(delim);
+    const row = {};
+    let any = false;
+    headers.forEach((h, j) => {
+      const v = cells[j] !== undefined ? String(cells[j]).trim() : '';
+      row[h] = v;
+      if (v) any = true;
+    });
+    if (!any) continue;
+    out.push(row);
+  }
+  return out;
+}
+
+function _luminiFieldsFromCsvRow(row) {
+  const keys = Object.keys(row || {});
+  const normK = k =>
+    String(k)
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase();
+  const idx = {};
+  keys.forEach(k => {
+    idx[normK(k)] = k;
+  });
+  const getNorm = patterns => {
+    for (const p of patterns) {
+      const up = p.toUpperCase();
+      for (const nk of Object.keys(idx)) {
+        if (nk.includes(up)) return String(row[idx[nk]] || '').trim();
+      }
+    }
+    return '';
+  };
+  return {
+    mat: getNorm(['MATRIC', 'MAT']),
+    nome: getNorm(['COLAB', 'NOME', 'NAME']),
+    sit: getNorm(['SITUA', 'STATUS', 'SIT']),
+    jornada: getNorm(['JORNA', 'JORN']),
+    matriz: getNorm(['MATRIZ', 'UNID', 'UNIT']) || 'NT',
+    cargo: getNorm(['CARGO', 'FUNCAO', 'FUNÇÃO', 'ROLE']),
+    horario: getNorm(['HORÁR', 'HORAR', 'HORA']),
+    lider: getNorm(['LIDER', 'LÍDER', 'GESTOR', 'SUPER']),
+    adm: _luminiFmtDate(getNorm(['ADMISS', 'ENTRADA', 'INICIO'])),
+    dias: getNorm(['DIAS', 'CONTRAT', 'PERIOD']),
+    dem: _luminiFmtDate(getNorm(['DEMISS', 'SAIDA', 'SAÍDA', 'DESLI'])),
+    tipoEx: getNorm(['TIPO DE EX', 'TIPO EX', 'EXAM TYPE']),
+    dataEx: _luminiFmtDate(getNorm(['DATA DO EX', 'DATA EX', 'EXAM DATE'])),
+    tel: getNorm(['TELEF', 'FONE', 'PHONE', 'CELUL']),
+    nasc: _luminiFmtDate(getNorm(['NASCI', 'BIRTH', 'NASCIMENTO', 'DATA NASC'])),
+    email: getNorm(['E-MAIL', 'EMAIL', 'E MAIL', 'MAIL'])
+  };
+}
+
+async function fetchEmployeesFromLuminiCsv() {
+  const url = String(window.LUMINI_EMPLOYEES_CSV_URL || _LUMINI_CSV_DEFAULT).trim();
+  const res = await fetch(url, { method: 'GET', cache: 'no-store' });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const text = await res.text();
+  const rawRows = parseRhLuminiCsvToRows(text);
+  const employees = [];
+  rawRows.forEach((raw, i) => {
+    const f = _luminiFieldsFromCsvRow(raw);
+    const mat = f.mat ? String(f.mat).replace(/\s+/g, '').trim() : '';
+    const nome = (f.nome || '').trim();
+    if (!mat || !nome) return;
+    employees.push(_luminiFieldsToEmployee(f, i));
+  });
+  if (!employees.length) throw new Error('CSV sem colaboradores válidos (MATRÍCULA + COLABORADOR)');
+  return employees;
 }
 
 async function fetchEmployeesFromLuminiXlsx() {
@@ -136,16 +250,27 @@ async function fetchEmployeesFromLuminiXlsx() {
   return rows.map((row, i) => _luminiFieldsToEmployee(_luminiRawRowToFields(row), i));
 }
 
-/** Employees: planilha Rh.Lumini.xlsx; se falhar, Firestore (loadCollection). */
+/** Employees: Rh.Lumini.csv (delimitador ;) → fallback XLSX → Firestore. */
 async function loadEmployeesWithSheetFallback() {
   try {
-    const data = await fetchEmployeesFromLuminiXlsx();
-    console.log('[PLANILHA] employees carregados:', data.length);
+    const data = await fetchEmployeesFromLuminiCsv();
+    console.log('[RH CSV] employees carregados:', data.length);
     window._employeesFromSheet = true;
+    window._employeesSheetSource = 'csv';
+    return data;
+  } catch (eCsv) {
+    console.warn('[RH CSV] falha:', eCsv && eCsv.message ? eCsv.message : eCsv);
+  }
+  try {
+    const data = await fetchEmployeesFromLuminiXlsx();
+    console.log('[PLANILHA XLSX] employees carregados:', data.length);
+    window._employeesFromSheet = true;
+    window._employeesSheetSource = 'xlsx';
     return data;
   } catch (e) {
     console.warn('[PLANILHA] falha, usando Firestore:', e && e.message ? e.message : e);
     window._employeesFromSheet = false;
+    window._employeesSheetSource = 'firestore';
     return loadCollection('employees');
   }
 }
@@ -322,6 +447,9 @@ window.initFirebase = async function() {
     }
 
     window._cache.employees   = migratedEmps;
+    if (window._employeesFromSheet && typeof window.appEmployeesToHREmployees === 'function') {
+      window._cache.hrEmployees = window.appEmployeesToHREmployees(migratedEmps);
+    }
     window._cache.careers     = cars;
     window._cache.evaluations = evals;
     window._cache.excecoes    = excs;
@@ -686,27 +814,74 @@ window._ntGetDailyAttendance = async function(teamId, dateStr) {
 
 /**
  * Cria ou atualiza frequência do dia (setDoc com merge; não duplica documento).
- * @param {{ teamId: string, date: string, status?: 'open'|'closed', records: Array<{employeeId:string,status:string}>, savedBy: string, isNew: boolean }} opts
+ *
+ * Cada registro é serializado com metadados de auditoria por linha:
+ *   { employeeId, status, createdBy, createdRole, updatedBy, updatedRole, updatedAt }
+ *
+ * Linhas alteradas por Admin/Gerente após o lançamento original do Supervisor
+ * podem ser detectadas no carregamento (updatedRole ∈ ['admin','manager'] e
+ * updatedBy !== createdBy) — habilitando o indicador visual "(editado)".
+ *
+ * @param {{
+ *   teamId: string,
+ *   date: string,
+ *   status?: 'open'|'closed',
+ *   records: Array<{employeeId:string,status:string}>,
+ *   savedBy: string,
+ *   savedRole?: string,
+ *   isNew: boolean,
+ *   priorRecords?: Array<object>
+ * }} opts
  */
 window._ntSaveDailyAttendance = async function(opts) {
   if (!window._dbReady) throw new Error('Firebase ainda não está pronto. Aguarde e tente de novo.');
   const teamId = String(opts.teamId || '').trim();
   const dateStr = String(opts.date || '').trim();
   const savedBy = String(opts.savedBy || '').trim();
+  const savedRole = String(opts.savedRole || '').trim().toLowerCase();
   const isNew = !!opts.isNew;
   const records = Array.isArray(opts.records) ? opts.records : [];
+  const priorRecords = Array.isArray(opts.priorRecords) ? opts.priorRecords : [];
   const st = opts.status === 'closed' ? 'closed' : 'open';
 
   if (!teamId || !dateStr || !savedBy) throw new Error('Equipe, data e usuário são obrigatórios.');
 
-  const cleaned = records.map(r => ({
-    employeeId: String(r.employeeId || '').trim(),
-    status: String(r.status || 'pending').trim()
-  })).filter(r => r.employeeId);
+  const priorById = {};
+  for (const p of priorRecords) {
+    if (p && p.employeeId) priorById[String(p.employeeId)] = p;
+  }
+
+  const now = Timestamp.now();
+
+  const cleaned = records.map(r => {
+    const empId = String(r.employeeId || '').trim();
+    const status = String(r.status || 'pending').trim();
+    const prior = priorById[empId];
+    if (!prior) {
+      return {
+        employeeId: empId,
+        status,
+        createdBy: savedBy,
+        createdRole: savedRole || 'supervisor',
+        updatedBy: savedBy,
+        updatedRole: savedRole || 'supervisor',
+        updatedAt: now
+      };
+    }
+    const statusChanged = String(prior.status || '') !== status;
+    return {
+      employeeId: empId,
+      status,
+      createdBy: prior.createdBy || prior.updatedBy || savedBy,
+      createdRole: prior.createdRole || prior.updatedRole || 'supervisor',
+      updatedBy: statusChanged ? savedBy : (prior.updatedBy || savedBy),
+      updatedRole: statusChanged ? (savedRole || 'supervisor') : (prior.updatedRole || 'supervisor'),
+      updatedAt: statusChanged ? now : (prior.updatedAt || now)
+    };
+  }).filter(r => r.employeeId);
 
   const docId = _ntDailyAttendanceDocId(teamId, dateStr);
   const ref = doc(db, DAILY_ATTENDANCE_COL, docId);
-  const now = Timestamp.now();
 
   const payload = {
     date: dateStr,
@@ -714,16 +889,145 @@ window._ntSaveDailyAttendance = async function(opts) {
     status: st,
     records: cleaned,
     updatedAt: now,
-    updatedBy: savedBy
+    updatedBy: savedBy,
+    updatedRole: savedRole || 'supervisor'
   };
 
   if (isNew) {
     payload.createdAt = now;
     payload.createdBy = savedBy;
+    payload.createdRole = savedRole || 'supervisor';
   }
 
   await setDoc(ref, payload, { merge: true });
   return { docId };
+};
+
+/**
+ * Lista datas (YYYY-MM-DD) que possuem documento `daily_attendance` para um time em um intervalo.
+ * Usado pela UI de calendário (dots).
+ *
+ * @param {{ teamId: string, startDate: string, endDate: string }} opts
+ * @returns {Promise<Set<string>>}
+ */
+window._ntListDailyAttendanceDatesForTeam = async function(opts) {
+  if (!window._dbReady) throw new Error('Firebase ainda não está pronto. Aguarde e tente de novo.');
+  const teamId = String(opts && opts.teamId ? opts.teamId : '').trim();
+  const startDate = String(opts && opts.startDate ? opts.startDate : '').trim();
+  const endDate = String(opts && opts.endDate ? opts.endDate : '').trim();
+  if (!teamId || !startDate || !endDate) throw new Error('Equipe e intervalo são obrigatórios.');
+
+  const q = query(
+    collection(db, DAILY_ATTENDANCE_COL),
+    where('teamId', '==', teamId),
+    where('date', '>=', startDate),
+    where('date', '<=', endDate)
+  );
+  const snap = await getDocs(q);
+  const out = new Set();
+  snap.docs.forEach(d => {
+    const data = d.data();
+    const ds = data && data.date != null ? String(data.date).trim() : '';
+    if (ds) out.add(ds);
+  });
+  return out;
+};
+
+/**
+ * Retorna um Map dateStr → resumo (presentes/faltas/atestados + faltantes + edições).
+ * Útil para popover/heatmap no calendário e indicador de retificação por Admin/Gerente.
+ *
+ * @param {{ teamId: string, startDate: string, endDate: string }} opts
+ * @returns {Promise<Map<string, {
+ *   presentes: number,
+ *   faltas: number,
+ *   atestados: number,
+ *   faltantes: string[],
+ *   hasAdminEdits: boolean,
+ *   total: number
+ * }>>}
+ */
+window._ntGetDailyAttendanceSummariesForTeam = async function(opts) {
+  if (!window._dbReady) throw new Error('Firebase ainda não está pronto. Aguarde e tente de novo.');
+  const teamId = String(opts && opts.teamId ? opts.teamId : '').trim();
+  const startDate = String(opts && opts.startDate ? opts.startDate : '').trim();
+  const endDate = String(opts && opts.endDate ? opts.endDate : '').trim();
+  if (!teamId || !startDate || !endDate) throw new Error('Equipe e intervalo são obrigatórios.');
+
+  const q = query(
+    collection(db, DAILY_ATTENDANCE_COL),
+    where('teamId', '==', teamId),
+    where('date', '>=', startDate),
+    where('date', '<=', endDate)
+  );
+  const snap = await getDocs(q);
+  const out = new Map();
+  snap.docs.forEach(d => {
+    const data = d.data() || {};
+    const dateStr = data.date != null ? String(data.date).trim() : '';
+    if (!dateStr) return;
+    const records = Array.isArray(data.records) ? data.records : [];
+    let presentes = 0;
+    let faltas = 0;
+    let atestados = 0;
+    let hasAdminEdits = false;
+    const faltantes = [];
+    for (const r of records) {
+      if (!r || !r.employeeId) continue;
+      const st = String(r.status || '').trim().toLowerCase();
+      if (st === 'presente') presentes += 1;
+      else if (st === 'falta') { faltas += 1; faltantes.push(String(r.employeeId)); }
+      else if (st === 'atestado') atestados += 1;
+      const updRole = String(r.updatedRole || '').trim().toLowerCase();
+      const crtRole = String(r.createdRole || '').trim().toLowerCase();
+      if ((updRole === 'admin' || updRole === 'manager') && updRole !== crtRole) {
+        hasAdminEdits = true;
+      }
+    }
+    out.set(dateStr, {
+      presentes,
+      faltas,
+      atestados,
+      faltantes,
+      hasAdminEdits,
+      total: records.length
+    });
+  });
+  return out;
+};
+
+/**
+ * Lista documentos `daily_attendance` completos para uma equipe em um intervalo.
+ * Útil para montar dashboards consolidados (rankings/heatmap) sem múltiplos fetches por dia.
+ *
+ * @param {{ teamId: string, startDate: string, endDate: string }} opts
+ * @returns {Promise<Array<{ id: string, date: string, teamId: string, records: any[] }>>}
+ */
+window._ntListDailyAttendanceDocsForTeam = async function(opts) {
+  if (!window._dbReady) throw new Error('Firebase ainda não está pronto. Aguarde e tente de novo.');
+  const teamId = String(opts && opts.teamId ? opts.teamId : '').trim();
+  const startDate = String(opts && opts.startDate ? opts.startDate : '').trim();
+  const endDate = String(opts && opts.endDate ? opts.endDate : '').trim();
+  if (!teamId || !startDate || !endDate) throw new Error('Equipe e intervalo são obrigatórios.');
+
+  const q = query(
+    collection(db, DAILY_ATTENDANCE_COL),
+    where('teamId', '==', teamId),
+    where('date', '>=', startDate),
+    where('date', '<=', endDate)
+  );
+  const snap = await getDocs(q);
+  const out = snap.docs
+    .map(d => ({ id: d.id, ...(d.data() || {}) }))
+    .filter(x => x && x.date)
+    .map(x => ({
+      id: String(x.id || ''),
+      date: String(x.date || '').trim(),
+      teamId: String(x.teamId || '').trim(),
+      records: Array.isArray(x.records) ? x.records : []
+    }))
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  return out;
 };
 
 // ─── Tela de loading ─────────────────────────

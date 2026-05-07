@@ -237,9 +237,17 @@ window.persistHRCollection = async function(name, arr) {
   }
 };
 
-// ─── SEED RH DATA: carrega do Firebase ou do seed ─
+// ─── RH: prioriza CSV/planilha (employees); senão Firebase hrEmployees ─
 window.initHRModule = async function() {
-  // Tenta carregar do Firebase se disponível
+  if (!window._cache) window._cache = {};
+  if (window._employeesFromSheet && typeof window.getEmployees === 'function' && typeof window.appEmployeesToHREmployees === 'function') {
+    const emps = window.getEmployees();
+    if (emps && emps.length) {
+      window._cache.hrEmployees = window.appEmployeesToHREmployees(emps);
+      console.log(`✅ RH: ${window._cache.hrEmployees.length} funcionários (fonte Rh.Lumini CSV/planilha).`);
+      return;
+    }
+  }
   if (window._dbReady && window._loadCollection) {
     try {
       const hrEmps = await window._loadCollection('hrEmployees');
@@ -248,12 +256,10 @@ window.initHRModule = async function() {
         console.log(`✅ RH: ${hrEmps.length} funcionários carregados do Firebase.`);
         return;
       }
-    } catch(e) { /* usa seed */ }
+    } catch (e) { /* fallback */ }
   }
-  // Usa seed local
-  if (!window._cache) window._cache = {};
   window._cache.hrEmployees = window.HR_EMPLOYEES_SEED || [];
-  console.log(`✅ RH: ${window._cache.hrEmployees.length} funcionários carregados do seed.`);
+  console.log(`✅ RH: ${window._cache.hrEmployees.length} funcionários (fallback).`);
 };
 
 // ─── RENDER DASHBOARD RH (INTERATIVO POR ANO) ─────────────────────

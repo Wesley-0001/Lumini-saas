@@ -54,18 +54,54 @@ function saveData(key, value) {}
 // ─── INIT ────────────────────────────────────
 window.bootApp = function() {
   const saved = sessionStorage.getItem('cp_user');
-  if (saved) {
-    let user = JSON.parse(saved);
-    const leg = window.LUMINI_LEGACY_EMAIL_MAP || {};
-    const key = String(user.email || '').toLowerCase();
-    if (leg[key]) {
-      const fromDemo = DEMO_USERS.find(u => u.email === leg[key]);
-      user = fromDemo || { ...user, email: leg[key] };
-      sessionStorage.setItem('cp_user', JSON.stringify(user));
-    }
-    currentUser = user;
-    startApp();
+  if (!saved) return;
+
+  let user;
+  try { user = JSON.parse(saved); } catch (_) { user = null; }
+  if (!user || typeof user !== 'object') {
+    sessionStorage.removeItem('cp_user');
+    return;
   }
+
+  // Migra e-mails legados (renato/heleno/toni/helcio/andre/carlos@lumini → versão oficial).
+  const leg = window.LUMINI_LEGACY_EMAIL_MAP || {};
+  const lkey = String(user.loginEmail || user.email || '').toLowerCase();
+  if (leg[lkey]) {
+    const fromDemo = (typeof DEMO_USERS !== 'undefined' && Array.isArray(DEMO_USERS))
+      ? DEMO_USERS.find(u => u.email === leg[lkey])
+      : null;
+    user = fromDemo
+      ? { ...fromDemo, loginEmail: fromDemo.email }
+      : { ...user, email: leg[lkey], loginEmail: leg[lkey] };
+  }
+
+  // Migração: sessões antigas de supervisor traziam `email = sup1@lumini`.
+  // Re-resolve via auth-config para obter o teamKey atual (ex.: "DANIEL").
+  const cfg = window.LUMINI_AUTH_CONFIG;
+  if (cfg && typeof cfg.resolveAuthForEmail === 'function') {
+    const probeEmail = String(user.loginEmail || user.email || '').toLowerCase();
+    const auth = cfg.resolveAuthForEmail(probeEmail);
+    if (auth && auth.role === 'supervisor') {
+      user = {
+        email:      auth.leaderKey,
+        loginEmail: probeEmail,
+        name:       auth.name,
+        role:       'supervisor',
+        leaderKey:  auth.leaderKey
+      };
+    } else if (auth) {
+      user = {
+        email:      probeEmail,
+        loginEmail: probeEmail,
+        name:       user.name || auth.name,
+        role:       auth.role
+      };
+    }
+  }
+
+  sessionStorage.setItem('cp_user', JSON.stringify(user));
+  currentUser = user;
+  startApp();
 };
 
 window.refreshCurrentPage = function() {
@@ -88,14 +124,80 @@ window.refreshCurrentPage = function() {
 };
 
 // ─── LOGIN ────────────────────────────────────
+// Autenticação 100% por e-mail. Cruza o e-mail digitado com:
+//   1. Listas de papéis em js/auth-config.js (admin / boss / manager / rh)
+//   2. Líderes "extras" (mapeados em auth-config) — ex.: GUSTAVO EXPEDIÇÃO
+//   3. Coluna EMAIL do Rh.Lumini.csv → se o colaborador é líder de outros,
+//      o sistema o reconhece automaticamente como SUPERVISOR.
+//
+// Para supervisores, mantemos `currentUser.email = leaderKey` (chave de
+// equipe normalizada — ex.: "DANIEL") por compatibilidade com filtros
+// existentes (`e.supervisor === currentUser.email`). O e-mail real digitado
+// fica em `currentUser.loginEmail`.
 function doLogin() {
-  const email = document.getElementById('login-email').value.trim().toLowerCase();
-  const pass  = document.getElementById('login-password').value.trim();
-  const errEl = document.getElementById('login-error');
+  const emailRaw = document.getElementById('login-email').value.trim();
+  const pass     = document.getElementById('login-password')?.value?.trim?.() || '';
+  const errEl    = document.getElementById('login-error');
 
-  const user = DEMO_USERS.find(u => u.email.toLowerCase() === email && u.password === pass);
-  if (!user) { errEl.classList.remove('hidden'); return; }
-  errEl.classList.add('hidden');
+  const showError = (msg) => {
+    if (!errEl) return;
+    errEl.classList.remove('hidden');
+    if (msg) errEl.textContent = msg;
+  };
+  const hideError = () => { if (errEl) errEl.classList.add('hidden'); };
+
+  const cfg = window.LUMINI_AUTH_CONFIG;
+  if (!cfg || typeof cfg.resolveAuthForEmail !== 'function') {
+    console.error('[Lumini] auth-config.js não carregado.');
+    showError('Erro de configuração — recarregue a página.');
+    return;
+  }
+
+  const email = String(emailRaw || '').toLowerCase();
+
+  // 1) Validação de formato
+  if (!email || !cfg.isValidEmail(email)) {
+    showError('Digite um e-mail válido.');
+    return;
+  }
+
+  // 2) Resolução de papel (admin / boss / manager / rh / supervisor)
+  const auth = cfg.resolveAuthForEmail(email);
+  if (!auth) {
+    showError('E-mail não autorizado. Fale com o administrador.');
+    return;
+  }
+
+  // 3) Senha (modo DEMO)
+  // - Se houver senha cadastrada para o e-mail, exige correspondência.
+  // - Se não houver, aceita qualquer senha não-vazia (modo demo/dev).
+  const expected = cfg.getDemoPassword(email);
+  if (expected != null) {
+    if (pass !== expected) { showError('E-mail ou senha incorretos.'); return; }
+  } else if (!pass) {
+    showError('Informe sua senha.'); return;
+  }
+
+  hideError();
+
+  // 4) Monta o usuário em estado global
+  // Para supervisor: `email` recebe a chave da equipe (compat com filtros).
+  // Para os demais: `email` é o próprio e-mail.
+  const user = (auth.role === 'supervisor')
+    ? {
+        email:      auth.leaderKey,   // teamKey: ex.: "DANIEL", "GUSTAVO EXPEDICAO"
+        loginEmail: email,            // e-mail real digitado no login
+        name:       auth.name,
+        role:       'supervisor',
+        leaderKey:  auth.leaderKey
+      }
+    : {
+        email,
+        loginEmail: email,
+        name:       auth.name,
+        role:       auth.role
+      };
+
   currentUser = user;
   sessionStorage.setItem('cp_user', JSON.stringify(user));
   startApp();
@@ -108,8 +210,7 @@ function startApp() {
 
   applyUserTheme();
 
-  const initials = currentUser.name.split(' ').slice(0,2).map(n=>n[0]).join('');
-  document.getElementById('user-initials').textContent = initials;
+  document.getElementById('user-initials').textContent = getInitials(currentUser.name);
   document.getElementById('user-menu-name').textContent = currentUser.name;
   document.getElementById('user-menu-role').textContent =
     currentUser.role === 'admin'   ? 'Administrador' :
@@ -122,7 +223,8 @@ function startApp() {
 
   if (currentUser.role === 'admin') {
     document.getElementById('menu-admin').classList.remove('hidden');
-    navigateTo('admin-dashboard');
+    // Admin deve cair direto na visão macro por supervisor
+    navigateTo('admin-supervisors');
   } else if (currentUser.role === 'boss') {
     document.getElementById('menu-boss').classList.remove('hidden');
     navigateTo('boss-dashboard');
@@ -134,7 +236,8 @@ function startApp() {
     navigateTo('rh-dashboard');
   } else {
     document.getElementById('menu-supervisor').classList.remove('hidden');
-    navigateTo('supervisor-home');
+    // Supervisor deve cair direto na tela de chamada/frequência
+    navigateTo('supervisor-team-attendance');
   }
 
   // Mostra itens de menu condicionais por permissão
@@ -173,19 +276,47 @@ function _applyMenuPermissions() {
 function applyUserTheme() {
   document.body.classList.remove('theme-sup1','theme-sup2','theme-admin','theme-andre','theme-carlos','theme-rh');
   if (!currentUser) return;
+  if (String(currentUser.role || '').toLowerCase() === 'admin') {
+    document.body.classList.add('theme-admin');
+    return;
+  }
+  // Aceita lookup por loginEmail (novo), email/teamKey (legado) e leaderKey.
   const themeMap = {
-    'sup1@lumini':    'theme-sup1',
-    'sup2@lumini':    'theme-sup2',
-    'sup3@lumini':    'theme-sup1',
-    'sup4@lumini':    'theme-sup2',
-    'admin@lumini':   'theme-admin',
-    'admin2@lumini':  'theme-admin',
-    'gerente@lumini': 'theme-andre',
-    'diretor@lumini': 'theme-carlos',
-    'rh@lumini':      'theme-rh'
+    'sup1@lumini':              'theme-sup1',
+    'sup2@lumini':              'theme-sup2',
+    'sup3@lumini':              'theme-sup1',
+    'sup4@lumini':              'theme-sup2',
+    'admin@lumini':             'theme-admin',
+    'admin2@lumini':            'theme-admin',
+    'gerente@lumini':           'theme-andre',
+    'diretor@lumini':           'theme-carlos',
+    'rh@lumini':                'theme-rh',
+    'daniel@lumini.com.br':     'theme-sup1',
+    'kaue@lumini.com.br':       'theme-sup2',
+    'tony@lumini.com.br':       'theme-sup1',
+    'helcio@lumini.com.br':     'theme-sup2',
+    'samuel@lumini.com.br':     'theme-andre',
+    'carlos@lumini.com.br':     'theme-carlos',
+    'rh@lumini.com.br':         'theme-rh',
+    // teamKey (LÍDER normalizado) → tema visual
+    'DANIEL':                   'theme-sup1',
+    'KAUE':                     'theme-sup2',
+    'TONI':                     'theme-sup1',
+    'TONY':                     'theme-sup1',
+    'HELCIO':                   'theme-sup2',
+    'GUSTAVO EXPEDICAO':        'theme-sup1'
   };
-  const theme = themeMap[currentUser.email.toLowerCase()];
-  if (theme) document.body.classList.add(theme);
+  const candidates = [
+    currentUser.loginEmail,
+    currentUser.email,
+    currentUser.leaderKey
+  ].filter(Boolean);
+  for (const c of candidates) {
+    const k1 = String(c).toLowerCase();
+    const k2 = String(c).toUpperCase();
+    if (themeMap[k1]) { document.body.classList.add(themeMap[k1]); return; }
+    if (themeMap[k2]) { document.body.classList.add(themeMap[k2]); return; }
+  }
 }
 
 function doLogout() {
@@ -319,6 +450,22 @@ function calcTenure(admissionDate) {
   return months < 0 ? 0 : months;
 }
 
+function _isoToday() { return new Date().toISOString().split('T')[0]; }
+
+function _daysBetweenISO(isoA, isoB) {
+  const a = new Date(String(isoA || '') + 'T12:00:00');
+  const b = new Date(String(isoB || '') + 'T12:00:00');
+  if (Number.isNaN(a.getTime()) || Number.isNaN(b.getTime())) return null;
+  const ms = b.getTime() - a.getTime();
+  return Math.floor(ms / (24 * 60 * 60 * 1000));
+}
+
+function _daysSinceISO(isoDate) {
+  const d = String(isoDate || '').trim();
+  if (!d) return null;
+  return _daysBetweenISO(d, _isoToday());
+}
+
 function tenureText(months) {
   const y = Math.floor(months/12), m = months%12;
   const parts = [];
@@ -329,6 +476,23 @@ function tenureText(months) {
 
 function getStatusInfo(employee) {
   const months = calcTenure(employee.admission);
+  const availability = employee && employee._availabilityToday
+    ? String(employee._availabilityToday).trim().toLowerCase()
+    : '';
+
+  if (availability === 'falta') {
+    return { label: '🚫 Ausente hoje', cls: 'status-absent', pct: 0, months };
+  }
+  if (availability === 'turno_cancelado') {
+    return { label: '⛔ Inativo hoje', cls: 'status-inactive', pct: 0, months };
+  }
+  if (availability === 'atestado') {
+    return { label: '🩺 Atestado hoje', cls: 'status-justified', pct: 0, months };
+  }
+  if (availability === 'folga') {
+    return { label: '🌿 Folga hoje', cls: 'status-justified', pct: 0, months };
+  }
+
   if (!employee.desiredRole || employee.status === 'registered') {
     return { label: '📋 Cadastrado', cls: 'status-registered', pct: 0, months };
   }
@@ -391,13 +555,73 @@ function supervisorExcecaoPendingButton() {
 }
 
 function getInitials(name) {
-  return name.split(' ').slice(0,2).map(n=>n[0]).join('').toUpperCase();
+  return String(name || '')
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map(n => n[0])
+    .join('')
+    .toUpperCase() || '??';
 }
 
 function formatDate(dateStr) {
   if (!dateStr) return '—';
   const [y,m,d] = dateStr.split('-');
   return `${d}/${m}/${y}`;
+}
+
+function _lastEvalDateForEmployee(empId, evaluations) {
+  const id = String(empId || '').trim();
+  if (!id) return '';
+  const evs = Array.isArray(evaluations) ? evaluations : getEvaluations();
+  const mine = evs.filter(ev => String(ev.employeeId || '').trim() === id && ev.date);
+  if (!mine.length) return '';
+  mine.sort((a, b) => new Date(b.date) - new Date(a.date));
+  return String(mine[0].date || '').trim();
+}
+
+function _isAwaitingSupervisorEvaluation(emp, evaluations) {
+  const X = Number.isFinite(Number(window.NT_EVAL_MIN_TENURE_DAYS))
+    ? Number(window.NT_EVAL_MIN_TENURE_DAYS)
+    : 60; // default: 60 dias
+
+  const admissionDays = _daysSinceISO(emp && emp.admission ? emp.admission : '');
+  const lastEval = _lastEvalDateForEmployee(emp && emp.id ? emp.id : '', evaluations);
+  const lastEvalDays = lastEval ? _daysSinceISO(lastEval) : null;
+
+  // Nunca avaliado: aguarda se passou de X dias de casa
+  if (!lastEval) return admissionDays != null && admissionDays > X;
+
+  // Já avaliado: aguarda se última avaliação passou de 90 dias
+  return lastEvalDays != null && lastEvalDays > 90;
+}
+
+let _todayAttendanceCache = { teamId: '', date: '', recordsByEmpId: null };
+async function _getTodayAttendanceMapForTeam(teamId) {
+  const tid = String(teamId || '').trim();
+  const today = _isoToday();
+  if (!tid) return null;
+  if (_todayAttendanceCache.teamId === tid && _todayAttendanceCache.date === today) {
+    return _todayAttendanceCache.recordsByEmpId;
+  }
+  _todayAttendanceCache = { teamId: tid, date: today, recordsByEmpId: null };
+  try {
+    if (typeof window._ntGetDailyAttendance !== 'function') return null;
+    const res = await window._ntGetDailyAttendance(tid, today);
+    const data = res && res.exists && res.data ? res.data : null;
+    const recs = data && Array.isArray(data.records) ? data.records : [];
+    const map = {};
+    recs.forEach(r => {
+      if (!r || !r.employeeId) return;
+      map[String(r.employeeId)] = String(r.status || '').trim().toLowerCase();
+    });
+    _todayAttendanceCache.recordsByEmpId = map;
+    return map;
+  } catch (e) {
+    console.warn('[Lumini] Falha ao buscar frequência de hoje:', e && e.message ? e.message : e);
+    return null;
+  }
 }
 
 function updateNotifBadge() {
@@ -1513,36 +1737,124 @@ const SUP_COLORS = {
 
 let _supOvData = [];
 
-function renderSupervisorsOverview() {
+function _supOvHashColor(key) {
+  const k = String(key || '');
+  let h = 0;
+  for (let i = 0; i < k.length; i++) h = ((h << 5) - h) + k.charCodeAt(i);
+  const hue = Math.abs(h) % 360;
+  return {
+    bg: `hsl(${hue} 55% 28%)`,
+    light: `hsl(${hue} 70% 92%)`,
+    text: '#fff'
+  };
+}
+
+function _supOvLeadersFromEmployees(employees) {
+  const map = new Map(); // key -> label
+  (employees || []).forEach(e => {
+    const key = String(e && e.supervisor ? e.supervisor : '').trim();
+    if (!key) return;
+    const label = String(e && e.rhLider ? e.rhLider : '').trim() || key;
+    if (!map.has(key)) map.set(key, label);
+  });
+  return Array.from(map.entries())
+    .map(([key, label]) => ({ key, label }))
+    .sort((a, b) => a.label.localeCompare(b.label, 'pt-BR', { sensitivity: 'base' }));
+}
+
+function _supOvTodayISO() { return new Date().toISOString().split('T')[0]; }
+function _supOvPad2(n) { return String(n).padStart(2, '0'); }
+
+async function renderSupervisorsOverview() {
   const employees   = getEmployees();
   const evaluations = getEvaluations();
-  const supervisors = DEMO_USERS.filter(u => u.role==='supervisor'||u.role==='manager');
+  const leaders = _supOvLeadersFromEmployees(employees);
+  const supervisors = leaders.map(l => ({ email: l.key, name: l.label, role: 'supervisor' }));
 
   const kpisEl = document.getElementById('sup-overview-kpis');
   if (kpisEl) {
     const totalEmps   = employees.length;
-    const totalReady  = employees.filter(e=>e.status==='ready').length;
+    // "Aguardam Avaliação" agora = colaboradores que ainda NÃO tiveram chamada no dia (por equipe)
+    // (calculado por time na montagem do overview; aqui começa como "—" e é atualizado ao final)
+    const totalReady  = 0;
     const totalPromo  = employees.filter(e=>['promoted','approved','pending_samuel','pending_samuel_return','pending_carlos'].includes(e.status)).length;
     const totalEvals  = evaluations.length;
     kpisEl.innerHTML = `
       <div class="stat-card blue"><div class="stat-icon"><i class="fas fa-users"></i></div><div class="stat-info"><span class="stat-value">${totalEmps}</span><span class="stat-label">Total Funcionários</span></div></div>
-      <div class="stat-card orange"><div class="stat-icon"><i class="fas fa-clock"></i></div><div class="stat-info"><span class="stat-value">${totalReady}</span><span class="stat-label">Aguardam Avaliação</span></div></div>
+      <div class="stat-card orange"><div class="stat-icon"><i class="fas fa-clock"></i></div><div class="stat-info"><span class="stat-value" id="sup-ov-kpi-awaiting">—</span><span class="stat-label">Aguardam Avaliação</span></div></div>
       <div class="stat-card green"><div class="stat-icon"><i class="fas fa-trophy"></i></div><div class="stat-info"><span class="stat-value">${totalPromo}</span><span class="stat-label">Em Promoção</span></div></div>
       <div class="stat-card yellow"><div class="stat-icon"><i class="fas fa-clipboard-list"></i></div><div class="stat-info"><span class="stat-value">${totalEvals}</span><span class="stat-label">Avaliações Feitas</span></div></div>`;
   }
 
-  _supOvData = supervisors.map(sup => {
-    const team     = employees.filter(e=>e.supervisor===sup.email);
-    const ready    = team.filter(e=>e.status==='ready').length;
+  const today = _supOvTodayISO();
+  const now = new Date();
+  const y = now.getFullYear();
+  const m0 = now.getMonth();
+  const startDate = `${y}-${_supOvPad2(m0 + 1)}-01`;
+  const endDate = today;
+
+  const fetchDaily = async (teamId) => {
+    try {
+      if (typeof window._ntGetDailyAttendance === 'function') {
+        return await window._ntGetDailyAttendance(teamId, today);
+      }
+    } catch (e) { /* noop */ }
+    return null;
+  };
+  const fetchSummaries = async (teamId) => {
+    try {
+      if (typeof window._ntGetDailyAttendanceSummariesForTeam === 'function') {
+        return await window._ntGetDailyAttendanceSummariesForTeam({ teamId, startDate, endDate });
+      }
+    } catch (e) { /* noop */ }
+    return null;
+  };
+
+  // Pré-carrega presença/faltas do mês e chamada do dia em paralelo
+  const dailyResults = await Promise.all(supervisors.map(s => fetchDaily(s.email)));
+  const monthResults = await Promise.all(supervisors.map(s => fetchSummaries(s.email)));
+
+  _supOvData = supervisors.map((sup, idx) => {
+    const team     = employees.filter(e => String(e.supervisor || '').trim() === String(sup.email || '').trim());
+
+    // Aguardam Avaliação = ainda não tiveram chamada hoje
+    const daily = dailyResults[idx];
+    const dailyRecords = daily && daily.exists && daily.data && Array.isArray(daily.data.records) ? daily.data.records : null;
+    const awaiting = !dailyRecords
+      ? team.length
+      : team.filter(e => {
+          const rec = dailyRecords.find(r => String(r.employeeId) === String(e.id));
+          const st = rec ? String(rec.status || '').trim().toLowerCase() : 'pending';
+          return st === 'pending' || st === 'nao definido' || st === 'não definido' || st === '';
+        }).length;
+
     const promoted = team.filter(e=>['promoted','approved','pending_samuel','pending_samuel_return','pending_carlos'].includes(e.status)).length;
     const evalsDone= evaluations.filter(ev=>team.some(e=>e.id===ev.employeeId)).length;
-    // Eficiência = % de funcionários SEM pendências (não em status 'ready').
-    // Só exibe valor real se a equipe tem pelo menos 1 funcionário cadastrado.
-    // Equipe vazia → mostra '—' (sem dados suficientes p/ calcular)
-    const efficiency = team.length > 0 ? Math.round(((team.length - ready) / team.length) * 100) : null;
-    const colors   = SUP_COLORS[sup.email] || { bg:'#6B7280', light:'#F3F4F6', text:'#fff' };
-    return { sup, team, ready, promoted, evalsDone, efficiency, colors };
+
+    // Status dinâmico (antes era "Sem dados"): Total de Faltas e Presença %
+    const summaries = monthResults[idx]; // Map(date -> {presentes,faltas,atestados,total})
+    let totalFaltas = 0;
+    let totalPresencas = 0;
+    let totalLancamentos = 0;
+    if (summaries && summaries instanceof Map) {
+      for (const s of summaries.values()) {
+        totalFaltas += Number(s.faltas || 0);
+        totalPresencas += Number(s.presentes || 0);
+        totalLancamentos += Number(s.total || 0);
+      }
+    }
+    const presPct = totalLancamentos > 0 ? Math.round((totalPresencas / totalLancamentos) * 100) : null;
+
+    const colors = SUP_COLORS[sup.email] || _supOvHashColor(sup.email);
+    return { sup, team, ready: awaiting, promoted, evalsDone, efficiency: presPct, colors, totalFaltas, presPct };
   });
+
+  // Atualiza KPI "Aguardam Avaliação" global
+  const kpiAwaitingEl = document.getElementById('sup-ov-kpi-awaiting');
+  if (kpiAwaitingEl) {
+    const totalAwaiting = _supOvData.reduce((acc, d) => acc + (Number(d.ready) || 0), 0);
+    kpiAwaitingEl.textContent = String(totalAwaiting);
+  }
 
   filterSupOverview();
 }
@@ -1573,8 +1885,11 @@ function filterSupOverview() {
 
   listEl.innerHTML = data.map(({sup,team,ready,promoted,evalsDone,efficiency,colors}) => {
     const roleLabel = sup.role==='manager'?'Gerente':sup.role==='boss'?'Diretor':'Supervisor';
+    const q = (document.getElementById('sup-ov-search')?.value||'').toLowerCase();
+    const matchedEmp = q ? team.find(e => (e.name || '').toLowerCase().includes(q)) : null;
+    const highlight = matchedEmp ? 'style="outline:3px solid #F59E0B; outline-offset:2px; border-radius:14px"' : '';
     return `
-    <div class="sup-ov-card">
+    <div class="sup-ov-card" ${highlight}>
       <div class="sup-ov-header" style="background:${colors.bg}">
         <div class="sup-ov-avatar" style="background:rgba(255,255,255,0.2)">${getInitials(sup.name)}</div>
         <div class="sup-ov-info">
@@ -1583,12 +1898,12 @@ function filterSupOverview() {
         </div>
         <div class="sup-ov-efficiency">
           <div class="sup-ov-eff-value">${efficiency !== null ? efficiency + '%' : '—'}</div>
-          <div class="sup-ov-eff-label">${efficiency !== null ? 'Eficiência' : 'Sem dados'}</div>
+          <div class="sup-ov-eff-label">${efficiency !== null ? 'Presença' : 'Sem dados'}</div>
         </div>
       </div>
       <div class="sup-ov-stats">
         <div class="sup-ov-stat"><span class="sup-stat-val">${team.length}</span><span class="sup-stat-lbl">Equipe</span></div>
-        <div class="sup-ov-stat"><span class="sup-stat-val" style="color:#D97706">${ready}</span><span class="sup-stat-lbl">Aguardam Aval.</span></div>
+        <div class="sup-ov-stat"><span class="sup-stat-val" style="color:#D97706">${ready}</span><span class="sup-stat-lbl">Aguardam Chamada</span></div>
         <div class="sup-ov-stat"><span class="sup-stat-val" style="color:#16A34A">${promoted}</span><span class="sup-stat-lbl">Em Promoção</span></div>
         <div class="sup-ov-stat"><span class="sup-stat-val" style="color:#7C3AED">${evalsDone}</span><span class="sup-stat-lbl">Avaliações</span></div>
       </div>
@@ -1596,7 +1911,15 @@ function filterSupOverview() {
         ${team.length===0?`<div class="sup-ov-empty">Nenhum funcionário nesta equipe</div>`:
           team.slice(0,5).map(e=>{
             const si=getStatusInfo(e);
-            return `<div class="sup-ov-emp"><div class="sup-ov-emp-avatar" style="background:${colors.bg}20;color:${colors.bg}">${getInitials(e.name)}</div><div class="sup-ov-emp-info"><div class="sup-ov-emp-name">${e.name}</div><div class="sup-ov-emp-role">${e.currentRole}</div></div><span class="status-badge ${si.cls}" style="font-size:10px">${si.label}</span></div>`;
+            const isMatch = q && (e.name || '').toLowerCase().includes(q);
+            return `<div class="sup-ov-emp" style="${isMatch ? 'background:rgba(245,158,11,0.15);border-radius:10px;padding:8px;' : ''}">
+              <div class="sup-ov-emp-avatar" style="background:${colors.bg}20;color:${colors.bg}">${getInitials(e.name)}</div>
+              <div class="sup-ov-emp-info">
+                <div class="sup-ov-emp-name">${e.name}</div>
+                <div class="sup-ov-emp-role">${e.currentRole}</div>
+              </div>
+              <span class="status-badge ${si.cls}" style="font-size:10px">${si.label}</span>
+            </div>`;
           }).join('')+
           (team.length>5?`<button class="sup-ov-more" onclick="_supOvToggleAll(this)" data-sup="${sup.email}">+${team.length-5} mais funcionários</button>`:'')
         }
@@ -1820,7 +2143,9 @@ function renderReports() {
 function renderSupervisorHome() {
   const employees = getEmployees();
   const myTeam    = currentUser.role==='supervisor' ? employees.filter(e=>e.supervisor===currentUser.email) : employees;
-  const eligible  = myTeam.filter(e => e.minMonths && calcTenure(e.admission)>=e.minMonths && e.status==='ready');
+  const evaluations = getEvaluations();
+  // "Aguardam Avaliação" = tenure > X dias (se nunca avaliou) OU última avaliação > 90 dias
+  const eligible  = myTeam.filter(e => _isAwaitingSupervisorEvaluation(e, evaluations));
   const pending   = myTeam.filter(e => ['pending_samuel','pending_samuel_return','pending_carlos'].includes(e.status));
 
   document.getElementById('supervisor-greeting').textContent = `Olá, ${currentUser.name}! 👋`;
@@ -1842,7 +2167,11 @@ function renderSupervisorHome() {
     if (!eligible.length) {
       eligibleEl.innerHTML = `<div class="empty-state"><i class="fas fa-check-circle"></i><p>Nenhum funcionário aguardando avaliação</p></div>`;
     } else {
-      eligibleEl.innerHTML = eligible.map(e => buildEmployeeCard(e, true)).join('');
+      // injeta disponibilidade de hoje (Falta → Ausente) antes de renderizar cards
+      _getTodayAttendanceMapForTeam(currentUser.email).then(map => {
+        const list = eligible.map(e => ({ ...e, _availabilityToday: map && map[String(e.id)] ? map[String(e.id)] : '' }));
+        eligibleEl.innerHTML = list.map(e => buildEmployeeCard(e, true)).join('');
+      });
     }
   }
 
@@ -1852,7 +2181,10 @@ function renderSupervisorHome() {
     if (!non_eligible.length && !eligible.length) {
       allEl.innerHTML = `<div class="empty-state"><i class="fas fa-users"></i><p>Nenhum funcionário na equipe ainda</p></div>`;
     } else {
-      allEl.innerHTML = non_eligible.map(e => buildEmployeeCard(e, false)).join('');
+      _getTodayAttendanceMapForTeam(currentUser.email).then(map => {
+        const list = non_eligible.map(e => ({ ...e, _availabilityToday: map && map[String(e.id)] ? map[String(e.id)] : '' }));
+        allEl.innerHTML = list.map(e => buildEmployeeCard(e, false)).join('');
+      });
     }
   }
 
@@ -1876,7 +2208,8 @@ function buildEmployeeCard(e, isEligible) {
   let actionBtn = '';
   // Nunca mostra "Avaliar" se já está em fluxo de promoção
   const blockedStatuses = _PROMO_BLOCKED_STATUSES;
-  if (e.status === 'ready' && isEligible && !blockedStatuses.includes(e.status)) {
+  // Ação "Avaliar" deve existir quando a regra de aguardando avaliação disparar
+  if (isEligible && !blockedStatuses.includes(e.status)) {
     actionBtn = `<button class="btn-primary btn-sm" onclick="startEvaluation('${e.id}')"><i class="fas fa-star"></i> Avaliar Agora</button>`;
   } else if (e.status === 'pending_samuel') {
     actionBtn = `<button class="btn-outline btn-sm" disabled><i class="fas fa-hourglass-half"></i> Aguardando Samuel...</button>`;
@@ -1926,11 +2259,15 @@ function renderSupervisorTeam() {
     return;
   }
 
-  tbody.innerHTML = filtered.map(e => {
-    const months  = calcTenure(e.admission);
-    const si      = getStatusInfo(e);
-    const pColor  = getProgressColor(si.pct);
-    return `<tr>
+  const evaluations = getEvaluations();
+  _getTodayAttendanceMapForTeam(currentUser.email).then(map => {
+    tbody.innerHTML = filtered.map(e0 => {
+      const e = { ...e0, _availabilityToday: map && map[String(e0.id)] ? map[String(e0.id)] : '' };
+      const months  = calcTenure(e.admission);
+      const awaiting = _isAwaitingSupervisorEvaluation(e, evaluations);
+      const si      = getStatusInfo(e);
+      const pColor  = getProgressColor(si.pct);
+      return `<tr data-emp-row="${e.id}" onclick="openTeamEmployeeQuickView('${e.id}')" style="cursor:pointer">
       <td>
         <div class="emp-name-cell">
           <div class="emp-avatar-sm">${getInitials(e.name)}</div>
@@ -1942,16 +2279,63 @@ function renderSupervisorTeam() {
       <td><div class="progress-wrap"><div class="progress-bar-bg"><div class="progress-bar-fill ${pColor}" style="width:${si.pct}%"></div></div><span class="progress-pct">${si.pct}%</span></div></td>
       <td><span class="status-badge ${si.cls}">${si.label}</span></td>
       <td>
-        <div class="action-btns">
-          ${e.status==='ready'&&!_PROMO_BLOCKED_STATUSES.includes(e.status)?`<button class="btn-primary btn-sm" onclick="startEvaluation('${e.id}')"><i class="fas fa-star"></i> Avaliar</button>`:''}
+        <div class="action-btns" onclick="event.stopPropagation()">
+          ${awaiting&&!_PROMO_BLOCKED_STATUSES.includes(e.status)?`<button class="btn-primary btn-sm" onclick="startEvaluation('${e.id}')"><i class="fas fa-star"></i> Avaliar</button>`:''}
           ${hasPendingExcecao(e.id)?supervisorExcecaoPendingButton():''}
           ${!hasPendingExcecao(e.id)&&canShowSupervisorExcecaoButton(e)?`<button class="btn-outline btn-sm" onclick="openExceptionRequest('${e.id}')"><i class="fas fa-file-signature"></i> Exceção</button>`:''}
           ${canShowSupervisorPromoButton(e)?`<button class="btn-outline btn-sm" onclick="openPromoRequest('${e.id}')"><i class="fas fa-rocket"></i> Promoção</button>`:''}
         </div>
       </td>
     </tr>`;
-  }).join('');
+    }).join('');
+  });
 }
+
+// Clique rápido na tabela Minha Equipe → atalhos para trilha/avaliação (pré-preenchido)
+window.openTeamEmployeeQuickView = function(empId) {
+  const emp = getEmployees().find(e => String(e.id) === String(empId));
+  if (!emp) return;
+  const evaluations = getEvaluations();
+  const lastEval = _lastEvalDateForEmployee(emp.id, evaluations);
+  const days = _daysSinceISO(emp.admission);
+  const awaitEval = _isAwaitingSupervisorEvaluation(emp, evaluations);
+
+  const modal = document.createElement('div');
+  modal.className = 'modal-overlay';
+  modal.innerHTML = `
+    <div class="modal" style="max-width:560px">
+      <div class="modal-header">
+        <h3><i class="fas fa-user"></i> ${emp.name}</h3>
+        <button class="modal-close" onclick="this.closest('.modal-overlay').remove()"><i class="fas fa-times"></i></button>
+      </div>
+      <div class="modal-body">
+        <div style="display:flex;gap:12px;align-items:center;margin-bottom:14px">
+          <div class="emp-avatar-lg">${getInitials(emp.name)}</div>
+          <div>
+            <div style="font-weight:800">${emp.currentRole || '—'}</div>
+            <div style="color:var(--text-secondary);font-size:13px">
+              Admissão: ${formatDate(emp.admission)}${days != null ? ` • ${days} dia(s) de casa` : ''}
+            </div>
+            <div style="color:var(--text-secondary);font-size:13px">
+              Última avaliação: ${lastEval ? formatDate(lastEval) : '—'}
+            </div>
+          </div>
+        </div>
+        ${awaitEval ? `<div class="alert-banner" style="display:flex"><i class="fas fa-bell"></i><span>Este colaborador está <strong>aguardando avaliação</strong>.</span></div>` : ''}
+      </div>
+      <div class="modal-footer">
+        <button class="btn-outline" onclick="this.closest('.modal-overlay').remove()">Fechar</button>
+        <button class="btn-outline" onclick="this.closest('.modal-overlay').remove(); navigateTo('admin-careers')">
+          <i class="fas fa-sitemap"></i> Trilha de Carreira
+        </button>
+        <button class="btn-primary" onclick="this.closest('.modal-overlay').remove(); startEvaluation('${emp.id}')">
+          <i class="fas fa-star"></i> Abrir Avaliação
+        </button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+};
 
 // ─── PROMO REQUEST ────────────────────────────
 function validatePromoRoleEligibility() {

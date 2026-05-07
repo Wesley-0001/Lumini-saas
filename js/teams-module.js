@@ -722,8 +722,9 @@ window._teamsAutoPopulate = function() {
 
 /* ─── HELPERS INTERNOS ─────────────────────── */
 function _getInitials(name) {
+  if (typeof window.getInitials === 'function') return window.getInitials(name);
   if (!name) return '??';
-  return name.split(' ').slice(0, 2).map(n => n[0]).join('').toUpperCase();
+  return String(name).trim().split(/\s+/).slice(0, 2).map(n => n[0]).join('').toUpperCase();
 }
 
 function _teamsRefreshCurrentPage() {

@@ -163,6 +163,9 @@
         <a class="nav-item" data-page="admin-supervisors" onclick="navigateTo('admin-supervisors')">
           <i class="fas fa-user-tie"></i> Por Supervisor
         </a>
+        <a class="nav-item" data-page="supervisor-team-attendance" onclick="navigateTo('supervisor-team-attendance')">
+          <i class="fas fa-clipboard-check"></i> Frequência das Equipes
+        </a>
         <a class="nav-item" data-page="admin-evaluations" onclick="navigateTo('admin-evaluations')">
           <i class="fas fa-clipboard-list"></i> Avaliações
         </a>
@@ -275,6 +278,9 @@
         </a>
         <a class="nav-item" data-page="manager-teams" onclick="navigateTo('manager-teams')">
           <i class="fas fa-layer-group"></i> Equipes de Produção
+        </a>
+        <a class="nav-item" data-page="supervisor-team-attendance" onclick="navigateTo('supervisor-team-attendance')">
+          <i class="fas fa-clipboard-check"></i> Frequência das Equipes
         </a>
         <a class="nav-item" data-page="manager-excecoes" onclick="navigateTo('manager-excecoes')">
           <i class="fas fa-shield-alt"></i> Aprovar Exceções
@@ -690,32 +696,264 @@
       </div>
     </div>
 
-    <!-- SUPERVISOR: FREQUÊNCIA DA EQUIPE -->
+    <!-- SUPERVISOR / ADMIN / GERENTE: FREQUÊNCIA DA EQUIPE -->
     <div id="page-supervisor-team-attendance" class="page-section hidden">
       <div class="page-header">
-        <h2><i class="fas fa-clipboard-check"></i> Frequência da Equipe</h2>
-        <span class="page-sub">Lançamento diário por colaborador — um documento por dia e equipe</span>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+          <h2 style="margin:0"><i class="fas fa-clipboard-check"></i> Frequência da Equipe</h2>
+          <div class="da-perspective-toggle" role="tablist" aria-label="Alternar visão">
+            <button type="button" class="da-persp-btn active" id="da-persp-daily" data-da-persp="daily">
+              <i class="fas fa-pen-to-square"></i> Visão Diária
+            </button>
+            <button type="button" class="da-persp-btn" id="da-persp-consolidated" data-da-persp="consolidated">
+              <i class="fas fa-chart-simple"></i> Resumo Geral
+            </button>
+          </div>
+        </div>
+        <span class="page-sub" id="da-page-sub">Lançamento diário por colaborador — um documento por dia e equipe</span>
       </div>
       <div class="da-toolbar">
-        <div class="form-group da-date-field">
+        <!-- input nativo: fica sincronizado com o calendário (fallback) -->
+        <div class="form-group da-date-field" hidden>
           <label for="da-attendance-date">Data</label>
           <input type="date" id="da-attendance-date" />
         </div>
+
+        <!-- Seletor de equipe (apenas Admin/Gerente) -->
+        <div class="form-group da-team-picker" id="da-team-picker" hidden>
+          <label for="da-team-select"><i class="fas fa-user-tie"></i> Equipe (Supervisor)</label>
+          <select id="da-team-select" class="da-team-select" aria-label="Selecionar equipe do supervisor"></select>
+        </div>
+
+        <div id="da-calendar" class="da-calendar" aria-label="Navegação de calendário"></div>
       </div>
       <p id="da-doc-hint" class="page-sub da-doc-hint"></p>
-      <div class="table-wrapper">
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Colaborador</th>
-              <th>Situação do dia</th>
-            </tr>
-          </thead>
-          <tbody id="da-attendance-tbody"></tbody>
-        </table>
+      <div class="da-view" id="da-view">
+        <!-- Resumo consolidado (Big Picture) -->
+        <section class="da-consolidated" id="da-consolidated" hidden aria-label="Dashboard de Auditoria Consolidada">
+          <div class="da-cons-head">
+            <div class="da-cons-title">
+              <div class="da-cons-kicker">Dashboard de Auditoria Consolidada</div>
+              <h3 class="da-cons-h3" id="da-cons-period-title">—</h3>
+              <p class="da-cons-sub" id="da-cons-period-sub">—</p>
+            </div>
+            <div class="da-cons-filters">
+              <div class="form-group da-shift-filter">
+                <label for="da-shift-filter"><i class="fas fa-filter"></i> Filtro de Turno</label>
+                <select id="da-shift-filter" class="da-team-select" aria-label="Filtrar por turno">
+                  <option value="all">Todos os turnos</option>
+                  <option value="manha">Manhã</option>
+                  <option value="tarde">Tarde</option>
+                  <option value="noite">Noite</option>
+                </select>
+              </div>
+              <button type="button" class="btn-outline" id="da-cons-refresh-btn" title="Recarregar resumo do período">
+                <i class="fas fa-rotate"></i> Atualizar
+              </button>
+            </div>
+          </div>
+
+          <div class="da-kpi-grid">
+            <div class="da-kpi-card">
+              <div class="da-kpi-label">Total de Faltas (Período)</div>
+              <div class="da-kpi-value" id="da-kpi-faltas">0</div>
+            </div>
+            <div class="da-kpi-card">
+              <div class="da-kpi-label">Presenças Confirmadas</div>
+              <div class="da-kpi-value" id="da-kpi-presencas">0</div>
+            </div>
+            <div class="da-kpi-card da-kpi-card--cancel">
+              <div class="da-kpi-label">Turnos Cancelados</div>
+              <div class="da-kpi-value da-kpi-value--cancel" id="da-kpi-cancelados">0</div>
+            </div>
+            <div class="da-kpi-card">
+              <div class="da-kpi-label">Aproveitamento da Equipe (%)</div>
+              <div class="da-kpi-value" id="da-kpi-aproveitamento">—</div>
+            </div>
+          </div>
+
+          <div class="da-cons-table-card">
+            <div class="da-cons-table-head">
+              <h4 class="da-cons-table-title"><i class="fas fa-ranking-star"></i> Performance por Colaborador</h4>
+              <span class="da-cons-badge" id="da-cons-count">0 colaboradores</span>
+            </div>
+            <div class="table-wrapper">
+              <table class="data-table da-cons-table">
+                <thead>
+                  <tr>
+                    <th>Colaborador</th>
+                    <th>Qtd Faltas</th>
+                    <th>Qtd Presenças</th>
+                    <th>Justificativas</th>
+                    <th>Assiduidade</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody id="da-cons-tbody"></tbody>
+              </table>
+            </div>
+            <div class="da-cons-hint">
+              Clique em um colaborador para ver as datas das faltas e retificar.
+            </div>
+          </div>
+
+          <div class="da-heatmap-card">
+            <div class="da-heatmap-head">
+              <h4 class="da-heatmap-title"><i class="fas fa-border-all"></i> Heatmap de Faltas (dia × colaborador)</h4>
+              <div class="da-heatmap-legend" aria-label="Legenda do heatmap">
+                <span class="da-hm-leg"><span class="da-hm-dot da-hm-dot--ok"></span> Presença</span>
+                <span class="da-hm-leg"><span class="da-hm-dot da-hm-dot--bad"></span> Falta</span>
+                <span class="da-hm-leg"><span class="da-hm-dot da-hm-dot--neu"></span> Sem registro</span>
+              </div>
+            </div>
+            <div class="da-heatmap-wrap" id="da-heatmap-wrap"></div>
+          </div>
+        </section>
+
+        <!-- Resumo Executivo Contextual (mostrado quando há frequência salva) -->
+        <section class="da-exec-summary" id="da-exec-summary" hidden aria-label="Resumo executivo do dia">
+          <div class="da-exec-top">
+            <div class="da-exec-title-block">
+              <div class="da-exec-kicker">Central de Análises</div>
+              <h3 class="da-exec-title" id="da-exec-title">Resumo Executivo do Dia</h3>
+              <p class="da-exec-sub" id="da-exec-sub">—</p>
+            </div>
+            <div class="da-exec-badges" id="da-exec-badges">
+              <!-- Badge "Frequência Consolidada" (Supervisor com dado salvo) -->
+              <span class="da-badge da-badge-consolidated" id="da-badge-consolidated" hidden>
+                <i class="fas fa-circle-check" aria-hidden="true"></i>
+                <span>Frequência Consolidada</span>
+              </span>
+              <!-- Badge "Modo Auditoria" (Admin/Gerente vendo registro de outrem) -->
+              <span class="da-badge da-badge-audit" id="da-badge-audit" hidden>
+                <i class="fas fa-user-shield" aria-hidden="true"></i>
+                <span>Modo Auditoria</span>
+              </span>
+            </div>
+          </div>
+          <div class="da-exec-metrics">
+            <div class="da-exec-metric da-exec-metric--ok">
+              <div class="da-exec-metric-icon"><i class="fas fa-user-check" aria-hidden="true"></i></div>
+              <div class="da-exec-metric-body">
+                <div class="da-exec-metric-label">Presenças</div>
+                <div class="da-exec-metric-value" id="da-exec-presencas">0</div>
+              </div>
+            </div>
+            <div class="da-exec-metric da-exec-metric--bad">
+              <div class="da-exec-metric-icon"><i class="fas fa-user-xmark" aria-hidden="true"></i></div>
+              <div class="da-exec-metric-body">
+                <div class="da-exec-metric-label">Faltas</div>
+                <div class="da-exec-metric-value" id="da-exec-faltas">0</div>
+              </div>
+            </div>
+            <div class="da-exec-metric da-exec-metric--info">
+              <div class="da-exec-metric-icon"><i class="fas fa-notes-medical" aria-hidden="true"></i></div>
+              <div class="da-exec-metric-body">
+                <div class="da-exec-metric-label">Atestados</div>
+                <div class="da-exec-metric-value" id="da-exec-atestados">0</div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- Modo leitura detalhada (dia concluído / com dados) -->
+        <section class="da-dashboard" id="da-dashboard" hidden aria-label="Visualização de resultados do dia">
+          <div class="da-dash-top">
+            <div>
+              <div class="da-dash-kicker">Visualização de Resultados</div>
+              <h3 class="da-dash-title" id="da-dash-title">—</h3>
+              <p class="da-dash-sub" id="da-dash-sub">—</p>
+            </div>
+            <div class="da-dash-actions">
+              <!-- Apenas para Admin/Gerente: ressalta que existe um botão lateral para Retificar -->
+              <button type="button" class="btn-outline" id="da-edit-btn" hidden><i class="fas fa-pen"></i> Editar Registro</button>
+              <button type="button" class="btn-rectify" id="da-rectify-btn" hidden>
+                <i class="fas fa-pen-ruler"></i> Retificar Frequência
+              </button>
+              <button type="button" class="btn-primary" id="da-export-btn"><i class="fas fa-file-export"></i> Exportar Relatório</button>
+            </div>
+          </div>
+          <div class="da-dash-metrics">
+            <div class="da-metric">
+              <div class="da-metric-label">Total Presentes</div>
+              <div class="da-metric-value" id="da-metric-presentes">0</div>
+            </div>
+            <div class="da-metric">
+              <div class="da-metric-label">Total Faltas</div>
+              <div class="da-metric-value" id="da-metric-faltas">0</div>
+            </div>
+            <div class="da-metric">
+              <div class="da-metric-label">Performance</div>
+              <div class="da-metric-value" id="da-metric-perf">—</div>
+            </div>
+          </div>
+          <div class="da-dash-grid">
+            <div class="da-dash-card">
+              <h4 class="da-dash-card-title"><i class="fas fa-user-times"></i> Top 3 Faltantes</h4>
+              <div id="da-top-faltantes" class="da-top-list"></div>
+            </div>
+            <div class="da-dash-card">
+              <h4 class="da-dash-card-title"><i class="fas fa-circle-info"></i> Resumo</h4>
+              <div id="da-dash-summary" class="da-summary"></div>
+            </div>
+          </div>
+          <!-- Faixa de auditoria (mostrada apenas se houver linhas retificadas por Admin/Gerente) -->
+          <div class="da-audit-strip" id="da-audit-strip" hidden>
+            <i class="fas fa-shield-halved" aria-hidden="true"></i>
+            <span id="da-audit-strip-text">Este registro contém retificações de Admin/Gerente.</span>
+          </div>
+        </section>
+
+        <!-- Modo vazio inteligente (dia futuro) -->
+        <section class="da-future" id="da-future" hidden aria-label="Dia futuro selecionado">
+          <div class="da-future-card">
+            <div class="da-future-icon"><i class="fas fa-wand-magic-sparkles"></i></div>
+            <div>
+              <h3 class="da-future-title" id="da-future-title">Planejamento do dia</h3>
+              <p class="da-future-text" id="da-future-text">—</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- Modo edição (input da frequência) -->
+        <div class="table-wrapper da-edit-wrap" id="da-edit-wrap">
+          <table class="data-table da-attendance-table">
+            <thead>
+              <tr>
+                <th>Colaborador</th>
+                <th>Situação do dia</th>
+              </tr>
+            </thead>
+            <tbody id="da-attendance-tbody"></tbody>
+          </table>
+        </div>
+        <div class="da-save-row" id="da-save-row">
+          <button type="button" class="btn-primary" id="da-save-btn"><i class="fas fa-save"></i> Salvar frequência do dia</button>
+          <button type="button" class="btn-outline" id="da-cancel-edit-btn" hidden><i class="fas fa-undo"></i> Cancelar edição</button>
+        </div>
       </div>
-      <div class="da-save-row">
-        <button type="button" class="btn-primary" id="da-save-btn"><i class="fas fa-save"></i> Salvar frequência do dia</button>
+
+      <!-- Modal: histórico do colaborador (faltas no período) -->
+      <div class="da-modal" id="da-emp-modal" hidden aria-hidden="true">
+        <div class="da-modal-backdrop" data-da-modal-close="1"></div>
+        <div class="da-modal-card" role="dialog" aria-modal="true" aria-labelledby="da-emp-modal-title">
+          <div class="da-modal-head">
+            <div>
+              <div class="da-modal-kicker">Histórico de Faltas</div>
+              <h3 class="da-modal-title" id="da-emp-modal-title">—</h3>
+              <p class="da-modal-sub" id="da-emp-modal-sub">—</p>
+            </div>
+            <button type="button" class="da-modal-close" title="Fechar" data-da-modal-close="1">
+              <i class="fas fa-xmark"></i>
+            </button>
+          </div>
+          <div class="da-modal-body">
+            <div id="da-emp-modal-body"></div>
+          </div>
+          <div class="da-modal-foot">
+            <button type="button" class="btn-outline" data-da-modal-close="1"><i class="fas fa-check"></i> Fechar</button>
+          </div>
+        </div>
       </div>
     </div>
 
