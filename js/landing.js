@@ -13,7 +13,7 @@
   }
 
   function goSystem() {
-    window.location.href = "index.html";
+    window.location.href = "login.html";
   }
 
   function scrollToAbout() {
