@@ -51,6 +51,28 @@ let chartEval = null;
 function loadData(key, fallback) { return fallback; }
 function saveData(key, value) {}
 
+// ─── Persistência explícita de sessão (login → app em páginas separadas) ─
+function _persistSessionExtras(user) {
+  if (!user || typeof user !== 'object') return;
+  try {
+    const loginEmail = String(user.loginEmail || user.email || '');
+    const role = String(user.role || '');
+    sessionStorage.setItem('lumini_login_email', loginEmail);
+    sessionStorage.setItem('lumini_role', role);
+    localStorage.setItem('lumini_login_email', loginEmail);
+    localStorage.setItem('lumini_role', role);
+  } catch (_) {}
+}
+
+function _clearSessionExtras() {
+  try {
+    sessionStorage.removeItem('lumini_login_email');
+    sessionStorage.removeItem('lumini_role');
+    localStorage.removeItem('lumini_login_email');
+    localStorage.removeItem('lumini_role');
+  } catch (_) {}
+}
+
 // ─── INIT ────────────────────────────────────
 window.bootApp = function() {
   const saved = sessionStorage.getItem('cp_user');
@@ -60,6 +82,7 @@ window.bootApp = function() {
   try { user = JSON.parse(saved); } catch (_) { user = null; }
   if (!user || typeof user !== 'object') {
     sessionStorage.removeItem('cp_user');
+    _clearSessionExtras();
     return;
   }
 
@@ -100,7 +123,14 @@ window.bootApp = function() {
   }
 
   sessionStorage.setItem('cp_user', JSON.stringify(user));
+  _persistSessionExtras(user);
   currentUser = user;
+
+  const appRoot = document.getElementById('app');
+  if (!appRoot) {
+    window.location.href = 'app.html';
+    return;
+  }
   startApp();
 };
 
@@ -200,12 +230,22 @@ function doLogin() {
 
   currentUser = user;
   sessionStorage.setItem('cp_user', JSON.stringify(user));
+  _persistSessionExtras(user);
+
+  const appRoot = document.getElementById('app');
+  if (!appRoot) {
+    window.location.href = 'app.html';
+    return;
+  }
   startApp();
 }
 
 function startApp() {
-  document.getElementById('page-login').classList.remove('active');
-  document.getElementById('page-login').classList.add('hidden');
+  const loginEl = document.getElementById('page-login');
+  if (loginEl) {
+    loginEl.classList.remove('active');
+    loginEl.classList.add('hidden');
+  }
   document.getElementById('app').classList.remove('hidden');
 
   applyUserTheme();
@@ -321,11 +361,17 @@ function applyUserTheme() {
 
 function doLogout() {
   sessionStorage.removeItem('cp_user');
-  document.body.classList.remove('theme-sup1','theme-sup2','theme-admin','theme-andre','theme-carlos');
+  _clearSessionExtras();
+  document.body.classList.remove('theme-sup1','theme-sup2','theme-admin','theme-andre','theme-carlos','theme-rh');
   if (_notifCheckInterval) { clearInterval(_notifCheckInterval); _notifCheckInterval = null; }
   if (window._ntUnsubscribeInAppNotifications) window._ntUnsubscribeInAppNotifications();
   currentUser = null;
-  location.reload();
+  const onAppOnly = document.getElementById('app') && !document.getElementById('page-login');
+  if (onAppOnly) {
+    window.location.href = 'login.html';
+  } else {
+    location.reload();
+  }
 }
 
 Object.defineProperty(window, 'currentUser', { get: () => currentUser, set: v => { currentUser = v; } });
@@ -333,6 +379,7 @@ Object.defineProperty(window, 'currentPage',  { get: () => currentPage,  set: v 
 
 function togglePass() {
   const inp = document.getElementById('login-password');
+  if (!inp) return;
   inp.type = inp.type === 'password' ? 'text' : 'password';
 }
 
