@@ -789,6 +789,38 @@ window._ntPublishEmployeeEvent = async function(opts) {
 
 /** Frequência diária por equipe (supervisor) — coleção `daily_attendance`. */
 const DAILY_ATTENDANCE_COL = 'daily_attendance';
+/** Coleção legada (algumas bases salvaram como `frequencias`). */
+const FREQUENCIAS_COL = 'frequencias';
+
+function _ntNormAttendanceStatus(st) {
+  const s = String(st == null ? '' : st).trim().toLowerCase();
+  // legado (P/F)
+  if (s === 'p' || s === 'presenca' || s === 'presença' || s === 'presente') return 'presente';
+  if (s === 'f' || s === 'falta') return 'falta';
+  if (s === 'folga') return 'folga';
+  if (s === 'turno_cancelado' || s === 'cancelado') return 'turno_cancelado';
+  if (s === 'atestado') return 'atestado';
+  return s || 'pending';
+}
+
+function _ntTryDateField(obj, candidates) {
+  for (const k of (Array.isArray(candidates) ? candidates : [])) {
+    if (obj && obj[k] != null && obj[k] !== '') return obj[k];
+  }
+  return null;
+}
+
+function _ntCoerceAnyDateToISO(v) {
+  // v pode ser string 'YYYY-MM-DD', 'DD/MM/YYYY', Date, Timestamp (firestore)
+  if (v == null || v === '') return '';
+  if (typeof v === 'string') return _luminiFmtDate(v);
+  if (v instanceof Date) return _luminiFmtDate(v);
+  // Timestamp Firestore (compat)
+  try {
+    if (typeof v.toDate === 'function') return _luminiFmtDate(v.toDate());
+  } catch {}
+  return _luminiFmtDate(String(v));
+}
 
 function _ntDailyAttendanceDocId(teamId, dateStr) {
   const t = String(teamId || '').trim().replace(/\//g, '_');
@@ -917,18 +949,35 @@ window._ntListDailyAttendanceDatesForTeam = async function(opts) {
   const endDate = String(opts && opts.endDate ? opts.endDate : '').trim();
   if (!teamId || !startDate || !endDate) throw new Error('Equipe e intervalo são obrigatórios.');
 
-  const q = query(
-    collection(db, DAILY_ATTENDANCE_COL),
-    where('teamId', '==', teamId),
-    where('date', '>=', startDate),
-    where('date', '<=', endDate)
-  );
-  const snap = await getDocs(q);
+  const looksLikeIndexError = (e) => {
+    const msg = String((e && (e.message || e.toString())) || '').toLowerCase();
+    return msg.includes('requires an index') || msg.includes('failed-precondition') || msg.includes('index');
+  };
+
+  let snap;
+  try {
+    const q = query(
+      collection(db, DAILY_ATTENDANCE_COL),
+      where('teamId', '==', teamId),
+      where('date', '>=', startDate),
+      where('date', '<=', endDate)
+    );
+    snap = await getDocs(q);
+  } catch (e) {
+    if (!looksLikeIndexError(e)) throw e;
+    const q2 = query(
+      collection(db, DAILY_ATTENDANCE_COL),
+      where('date', '>=', startDate),
+      where('date', '<=', endDate)
+    );
+    snap = await getDocs(q2);
+  }
   const out = new Set();
   snap.docs.forEach(d => {
     const data = d.data();
     const ds = data && data.date != null ? String(data.date).trim() : '';
-    if (ds) out.add(ds);
+    const tid = data && data.teamId != null ? String(data.teamId).trim() : '';
+    if (ds && tid === teamId) out.add(ds);
   });
   return out;
 };
@@ -954,16 +1003,34 @@ window._ntGetDailyAttendanceSummariesForTeam = async function(opts) {
   const endDate = String(opts && opts.endDate ? opts.endDate : '').trim();
   if (!teamId || !startDate || !endDate) throw new Error('Equipe e intervalo são obrigatórios.');
 
-  const q = query(
-    collection(db, DAILY_ATTENDANCE_COL),
-    where('teamId', '==', teamId),
-    where('date', '>=', startDate),
-    where('date', '<=', endDate)
-  );
-  const snap = await getDocs(q);
+  const looksLikeIndexError = (e) => {
+    const msg = String((e && (e.message || e.toString())) || '').toLowerCase();
+    return msg.includes('requires an index') || msg.includes('failed-precondition') || msg.includes('index');
+  };
+
+  let snap;
+  try {
+    const q = query(
+      collection(db, DAILY_ATTENDANCE_COL),
+      where('teamId', '==', teamId),
+      where('date', '>=', startDate),
+      where('date', '<=', endDate)
+    );
+    snap = await getDocs(q);
+  } catch (e) {
+    if (!looksLikeIndexError(e)) throw e;
+    const q2 = query(
+      collection(db, DAILY_ATTENDANCE_COL),
+      where('date', '>=', startDate),
+      where('date', '<=', endDate)
+    );
+    snap = await getDocs(q2);
+  }
   const out = new Map();
   snap.docs.forEach(d => {
     const data = d.data() || {};
+    const tid = data.teamId != null ? String(data.teamId).trim() : '';
+    if (tid !== teamId) return;
     const dateStr = data.date != null ? String(data.date).trim() : '';
     if (!dateStr) return;
     const records = Array.isArray(data.records) ? data.records : [];
@@ -974,7 +1041,7 @@ window._ntGetDailyAttendanceSummariesForTeam = async function(opts) {
     const faltantes = [];
     for (const r of records) {
       if (!r || !r.employeeId) continue;
-      const st = String(r.status || '').trim().toLowerCase();
+      const st = _ntNormAttendanceStatus(r.status);
       if (st === 'presente') presentes += 1;
       else if (st === 'falta') { faltas += 1; faltantes.push(String(r.employeeId)); }
       else if (st === 'atestado') atestados += 1;
@@ -1010,13 +1077,32 @@ window._ntListDailyAttendanceDocsForTeam = async function(opts) {
   const endDate = String(opts && opts.endDate ? opts.endDate : '').trim();
   if (!teamId || !startDate || !endDate) throw new Error('Equipe e intervalo são obrigatórios.');
 
-  const q = query(
-    collection(db, DAILY_ATTENDANCE_COL),
-    where('teamId', '==', teamId),
-    where('date', '>=', startDate),
-    where('date', '<=', endDate)
-  );
-  const snap = await getDocs(q);
+  const looksLikeIndexError = (e) => {
+    const msg = String((e && (e.message || e.toString())) || '').toLowerCase();
+    return msg.includes('requires an index') || msg.includes('failed-precondition') || msg.includes('index');
+  };
+
+  let snap;
+  try {
+    // Caminho preferencial (rápido) — pode exigir índice composto (teamId + date).
+    const q = query(
+      collection(db, DAILY_ATTENDANCE_COL),
+      where('teamId', '==', teamId),
+      where('date', '>=', startDate),
+      where('date', '<=', endDate)
+    );
+    snap = await getDocs(q);
+  } catch (e) {
+    // Bypass definitivo: busca por data apenas (sem índice composto) e filtra no front-end.
+    if (!looksLikeIndexError(e)) throw e;
+    const q2 = query(
+      collection(db, DAILY_ATTENDANCE_COL),
+      where('date', '>=', startDate),
+      where('date', '<=', endDate)
+    );
+    snap = await getDocs(q2);
+  }
+
   const out = snap.docs
     .map(d => ({ id: d.id, ...(d.data() || {}) }))
     .filter(x => x && x.date)
@@ -1026,8 +1112,193 @@ window._ntListDailyAttendanceDocsForTeam = async function(opts) {
       teamId: String(x.teamId || '').trim(),
       records: Array.isArray(x.records) ? x.records : []
     }))
+    .filter(x => String(x.teamId || '').trim() === teamId)
     .sort((a, b) => String(a.date).localeCompare(String(b.date)));
   return out;
+};
+
+/**
+ * Coleção legada `frequencias`: tenta buscar docs do período e normalizar para o mesmo shape de `daily_attendance`.
+ * Importante: algumas bases salvaram a data como Timestamp; outras, como string.
+ *
+ * @param {{ teamId: string, startDate: string, endDate: string }} opts
+ * @returns {Promise<Array<{ id: string, date: string, teamId: string, records: any[] }>>}
+ */
+window._ntListFrequenciasDocsForTeam = async function(opts) {
+  if (!window._dbReady) throw new Error('Firebase ainda não está pronto. Aguarde e tente de novo.');
+  const teamId = String(opts && opts.teamId ? opts.teamId : '').trim();
+  const startDate = String(opts && opts.startDate ? opts.startDate : '').trim();
+  const endDate = String(opts && opts.endDate ? opts.endDate : '').trim();
+  if (!teamId || !startDate || !endDate) throw new Error('Equipe e intervalo são obrigatórios.');
+
+  const startTs = Timestamp.fromDate(new Date(startDate + 'T00:00:00'));
+  const endTs = Timestamp.fromDate(new Date(endDate + 'T23:59:59'));
+
+  const looksLikeIndexError = (e) => {
+    const msg = String((e && (e.message || e.toString())) || '').toLowerCase();
+    return msg.includes('requires an index') || msg.includes('failed-precondition') || msg.includes('index');
+  };
+
+  // 1) tenta por string (field `date` ou `data`)
+  const tryStringRange = async () => {
+    const out = [];
+    for (const field of ['date', 'data']) {
+      try {
+        let snap;
+        try {
+          const q = query(
+            collection(db, FREQUENCIAS_COL),
+            where('teamId', '==', teamId),
+            where(field, '>=', startDate),
+            where(field, '<=', endDate)
+          );
+          snap = await getDocs(q);
+        } catch (e) {
+          // Bypass definitivo: busca por data apenas e filtra `teamId` no front-end.
+          if (!looksLikeIndexError(e)) throw e;
+          const q2 = query(
+            collection(db, FREQUENCIAS_COL),
+            where(field, '>=', startDate),
+            where(field, '<=', endDate)
+          );
+          snap = await getDocs(q2);
+        }
+        snap.docs.forEach(d => out.push({ id: d.id, ...(d.data() || {}) }));
+        if (out.length) break;
+      } catch (e) {
+        // ignora: pode falhar por índice/campo inexistente
+      }
+    }
+    return out;
+  };
+
+  // 2) tenta por timestamp (field `date` ou `data`)
+  const tryTimestampRange = async () => {
+    const out = [];
+    for (const field of ['date', 'data']) {
+      try {
+        let snap;
+        try {
+          const q = query(
+            collection(db, FREQUENCIAS_COL),
+            where('teamId', '==', teamId),
+            where(field, '>=', startTs),
+            where(field, '<=', endTs)
+          );
+          snap = await getDocs(q);
+        } catch (e) {
+          // Bypass definitivo: busca por data apenas e filtra `teamId` no front-end.
+          if (!looksLikeIndexError(e)) throw e;
+          const q2 = query(
+            collection(db, FREQUENCIAS_COL),
+            where(field, '>=', startTs),
+            where(field, '<=', endTs)
+          );
+          snap = await getDocs(q2);
+        }
+        snap.docs.forEach(d => out.push({ id: d.id, ...(d.data() || {}) }));
+        if (out.length) break;
+      } catch (e) {
+        // ignora: pode falhar por índice/campo inexistente
+      }
+    }
+    return out;
+  };
+
+  let raw = await tryStringRange();
+  if (!raw.length) raw = await tryTimestampRange();
+
+  // Normaliza para {date:'YYYY-MM-DD', teamId, records:[{employeeId,status,...}]}
+  const normalized = raw
+    .map(x => {
+      const dateVal = _ntTryDateField(x, ['date', 'data', 'day', 'dia', 'createdAt']);
+      const dateStr = _ntCoerceAnyDateToISO(dateVal);
+
+      const recsRaw =
+        Array.isArray(x.records) ? x.records :
+        Array.isArray(x.frequencias) ? x.frequencias :
+        Array.isArray(x.lista) ? x.lista :
+        Array.isArray(x.presencas) ? x.presencas :
+        [];
+
+      const records = (Array.isArray(recsRaw) ? recsRaw : [])
+        .map(r => {
+          if (!r) return null;
+          const employeeId = String(
+            r.employeeId != null ? r.employeeId :
+            r.colaboradorId != null ? r.colaboradorId :
+            r.id != null ? r.id :
+            r.matricula != null ? r.matricula :
+            ''
+          ).trim();
+          if (!employeeId) return null;
+          const status = _ntNormAttendanceStatus(
+            r.status != null ? r.status :
+            r.situacao != null ? r.situacao :
+            r.presenca != null ? r.presenca :
+            r.valor != null ? r.valor :
+            ''
+          );
+          return {
+            employeeId,
+            status,
+            createdBy: r.createdBy,
+            createdRole: r.createdRole,
+            updatedBy: r.updatedBy,
+            updatedRole: r.updatedRole,
+            updatedAt: r.updatedAt
+          };
+        })
+        .filter(Boolean);
+
+      return {
+        id: String(x.id || ''),
+        date: dateStr,
+        teamId: String(x.teamId || teamId).trim(),
+        records
+      };
+    })
+    .filter(d => d && d.date && d.teamId)
+    .filter(d => String(d.teamId || '').trim() === teamId)
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
+
+  return normalized;
+};
+
+/**
+ * Lista docs do período para dashboard/calendário, tentando `daily_attendance` (novo) e `frequencias` (legado).
+ * @param {{ teamId: string, startDate: string, endDate: string }} opts
+ * @returns {Promise<Array<{ id: string, date: string, teamId: string, records: any[] }>>}
+ */
+window._ntListAttendanceDocsForTeam = async function(opts) {
+  const teamId = String(opts && opts.teamId ? opts.teamId : '').trim();
+  const startDate = String(opts && opts.startDate ? opts.startDate : '').trim();
+  const endDate = String(opts && opts.endDate ? opts.endDate : '').trim();
+  if (!teamId || !startDate || !endDate) throw new Error('Equipe e intervalo são obrigatórios.');
+
+  let primary = [];
+  try {
+    primary = await window._ntListDailyAttendanceDocsForTeam({ teamId, startDate, endDate });
+  } catch {}
+  if (Array.isArray(primary) && primary.length) {
+    // garante status normalizado (se alguém salvou P/F por engano na daily_attendance)
+    return primary.map(d => ({
+      ...d,
+      date: String(d.date || '').trim(),
+      teamId: String(d.teamId || teamId).trim(),
+      records: (Array.isArray(d.records) ? d.records : []).map(r => ({
+        ...r,
+        status: _ntNormAttendanceStatus(r && r.status)
+      }))
+    }));
+  }
+
+  // fallback legado
+  try {
+    return await window._ntListFrequenciasDocsForTeam({ teamId, startDate, endDate });
+  } catch (e) {
+    return [];
+  }
 };
 
 // ─── Tela de loading ─────────────────────────

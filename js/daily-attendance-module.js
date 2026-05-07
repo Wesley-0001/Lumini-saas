@@ -61,7 +61,7 @@
   let _perspective = 'daily';
 
   /** Filtro de turno no consolidado */
-  /** @type {'all'|'manha'|'tarde'|'noite'} */
+  /** @type {'all'|'dia'|'noite'} */
   let _shiftFilter = 'all';
 
   /** Cache do consolidado por mês/equipe/filtro */
@@ -128,8 +128,7 @@
   }
 
   function _shiftLabel(key) {
-    if (key === 'manha') return 'Manhã';
-    if (key === 'tarde') return 'Tarde';
+    if (key === 'dia') return 'Dia';
     if (key === 'noite') return 'Noite';
     return 'Todos';
   }
@@ -527,6 +526,9 @@
     _renderCalendar();
     if (!opts || opts.silent !== true) {
       requestAnimationFrame(() => _loadFromFirestore(ds));
+    }
+    if (_perspective === 'consolidated') {
+      requestAnimationFrame(() => _renderConsolidatedForCurrentMonth({ force: false }));
     }
   }
 
@@ -1347,19 +1349,36 @@
 
   async function _fetchConsolidatedMonthDocs(teamId, y, m0) {
     const { startDate, endDate } = _monthStartEnd(y, m0);
-    if (typeof window._ntListDailyAttendanceDocsForTeam !== 'function') {
-      throw new Error('Serviço indisponível: _ntListDailyAttendanceDocsForTeam');
+    if (typeof window._ntListAttendanceDocsForTeam !== 'function') {
+      throw new Error('Serviço indisponível: _ntListAttendanceDocsForTeam');
     }
-    return await window._ntListDailyAttendanceDocsForTeam({ teamId, startDate, endDate });
+    const data = await window._ntListAttendanceDocsForTeam({ teamId, startDate, endDate });
+    console.log('Dados recuperados para o dashboard:', data);
+    return data;
   }
 
   function _computeConsolidatedPayload(teamEmployees, docs, y, m0, shift) {
     const team = Array.isArray(teamEmployees) ? teamEmployees : [];
-    const filteredTeam = shift && shift !== 'all'
-      ? team.filter(e => _inferShift(e) === shift)
-      : team.slice();
+    const filteredTeam = (() => {
+      const s = String(shift || 'all').trim().toLowerCase();
+      if (!s || s === 'all') return team.slice();
+      if (s === 'noite') return team.filter(e => _inferShift(e) === 'noite');
+      // "Dia" agrega manhã + tarde
+      return team.filter(e => {
+        const inf = _inferShift(e);
+        return inf === 'manha' || inf === 'tarde';
+      });
+    })();
 
     const ids = new Set(filteredTeam.map(e => String(e.id)));
+    const idByNameKey = (() => {
+      const m = new Map();
+      filteredTeam.forEach(e => {
+        const k = _normLeader(e && e.name ? e.name : '').replace(/\s+/g, ' ').trim();
+        if (k && !m.has(k)) m.set(k, String(e.id));
+      });
+      return m;
+    })();
     const nameById = {};
     filteredTeam.forEach(e => { nameById[String(e.id)] = e.name || '—'; });
 
@@ -1386,10 +1405,21 @@
 
       const recs = Array.isArray(doc.records) ? doc.records : [];
       for (const r of recs) {
-        const empId = r && r.employeeId != null ? String(r.employeeId) : '';
+        let empId = r && r.employeeId != null ? String(r.employeeId) : '';
+        if (!empId) continue;
+        if (!ids.has(empId)) {
+          // Alguns legados salvam o "employeeId" como NOME (COLABORADOR) ao invés de MATRÍCULA.
+          const byName = idByNameKey.get(_normLeader(empId).replace(/\s+/g, ' ').trim());
+          if (byName) empId = byName;
+        }
         if (!empId || !ids.has(empId)) continue;
         if (!agg[empId]) continue;
-        const st = String(r.status || '').trim().toLowerCase();
+        const st0 = String(r.status || '').trim().toLowerCase();
+        const st =
+          st0 === 'p' ? 'presente' :
+          st0 === 'f' ? 'falta' :
+          (st0 === 'presenca' || st0 === 'presença') ? 'presente' :
+          st0;
         if (st === 'presente') { agg[empId].pres += 1; agg[empId].totalKnown += 1; if (dayIdx >= 0) hm[empId][dayIdx] = 'ok'; }
         else if (st === 'falta') { agg[empId].falt += 1; agg[empId].totalKnown += 1; agg[empId].faltDates.push(dateStr); if (dayIdx >= 0) hm[empId][dayIdx] = 'bad'; }
         else if (st === 'turno_cancelado') { agg[empId].cancel += 1; agg[empId].totalKnown += 1; if (dayIdx >= 0) hm[empId][dayIdx] = 'bad'; }
@@ -1586,10 +1616,11 @@
       try {
         docs = await _fetchConsolidatedMonthDocs(teamId, y, m0);
       } catch (e) {
-        // Banco pode estar indexando: seguimos com docs vazios e renderizamos o período mesmo assim.
+        // Se o banco falhar, seguimos com docs vazios e renderizamos o período mesmo assim.
         docs = [];
       }
 
+      console.log('Dados processados no Front:', docs);
       const payload = _computeConsolidatedPayload(teamEmployees, docs, y, m0, shift);
       _consCache.set(key, { teamId, y, m0, shift, computedAt: Date.now(), payload });
       _renderConsolidatedUi(payload, teamId);
