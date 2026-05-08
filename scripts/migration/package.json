@@ -6,7 +6,8 @@
   "type": "module",
   "scripts": {
     "migrate:attendance": "node ./migrate-attendance.mjs",
-    "cleanup:attendance": "node ./migrate-attendance.mjs --cleanup"
+    "cleanup:attendance": "node ./migrate-attendance.mjs --cleanup",
+    "create-users": "node ../create-auth-users.mjs"
   },
   "engines": {
     "node": ">=18"

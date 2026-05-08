@@ -6,10 +6,6 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // Cross-Resource Validation (sem Custom Claims / sem backend)
-    // Fonte de verdade: /users/$(request.auth.uid)
-    // ─────────────────────────────────────────────────────────────
     function userPath() {
       return /databases/$(database)/documents/users/$(request.auth.uid);
     }
@@ -24,18 +20,24 @@ service cloud.firestore {
 
     function userRole() {
       return hasUserData() && getUserData().role != null
-        ? getUserData().role
-        : '';
+        ? getUserData().role : '';
     }
 
     function userTeamId() {
       return hasUserData() && getUserData().teamId != null
-        ? getUserData().teamId
-        : null;
+        ? getUserData().teamId : null;
     }
 
     function isAdmin() {
-      return signedIn() && userRole() == 'admin';
+      return signedIn() && (userRole() == 'admin' || userRole() == 'boss' || userRole() == 'manager');
+    }
+
+    function isRH() {
+      return signedIn() && userRole() == 'rh';
+    }
+
+    function isSupervisor() {
+      return signedIn() && userRole() == 'supervisor';
     }
 
     function teamMatchesDoc(data) {
@@ -45,60 +47,89 @@ service cloud.firestore {
         && data.teamId == userTeamId();
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // daily_attendance (frequência por equipe)
-    // Leitura: somente autenticados e dentro do escopo da equipe (ou admin-like).
-    // Escrita: admin-like OU supervisor dono da equipe.
-    // ─────────────────────────────────────────────────────────────
-    match /daily_attendance/{docId} {
-      allow read: if signedIn() && (isAdmin() || teamMatchesDoc(resource.data));
-
-      allow create: if signedIn() && (
-        isAdmin()
-        || (
-          request.resource.data.teamId != null
-          && userTeamId() != null
-          && request.resource.data.teamId == userTeamId()
-        )
-      );
-
-      allow update: if signedIn() && (
-        isAdmin()
-        || (
-          teamMatchesDoc(resource.data)
-          && request.resource.data.teamId == resource.data.teamId
-          && userTeamId() != null
-          && request.resource.data.teamId == userTeamId()
-        )
-      );
-
-      allow delete: if signedIn() && isAdmin();
-    }
-
-    // ─────────────────────────────────────────────────────────────
-    // users: modo manutenção — leitura apenas do documento /users/{auth.uid}; sem escrita pelo cliente.
-    // ─────────────────────────────────────────────────────────────
+    // users: cada um lê/atualiza apenas o próprio documento por UID
+    // admin pode criar e atualizar qualquer usuário
     match /users/{uid} {
-      // Modo manutenção: lê só o próprio documento por UID (sem cross-validation pesada)
       allow read: if request.auth != null && request.auth.uid == uid;
-      allow write: if false;
+      allow create: if isAdmin();
+      allow update: if isAdmin() || request.auth.uid == uid;
+      allow delete: if isAdmin();
     }
 
-    // ─────────────────────────────────────────────────────────────
-    // leaders: (opcional) leitura do próprio time (ou admin); escrita só admin.
-    // Útil para setups legados onde "leaders" guarda equipe/escopo.
-    // ─────────────────────────────────────────────────────────────
-    match /leaders/{leaderId} {
-      allow read: if signedIn() && (isAdmin() || (
-        userTeamId() != null && leaderId == userTeamId()
-      ));
-      allow create, update, delete: if signedIn() && isAdmin();
+    // employees: admin e RH têm acesso total; supervisor lê só sua equipe
+    match /employees/{docId} {
+      allow read: if isAdmin() || isRH() || (isSupervisor() && teamMatchesDoc(resource.data));
+      allow write: if isAdmin() || isRH();
     }
 
-    // Padrão seguro: negar o resto até definir regras por coleção.
+    // teams: admin e RH têm acesso total; supervisor lê só sua equipe
+    match /teams/{docId} {
+      allow read: if isAdmin() || isRH() || isSupervisor();
+      allow write: if isAdmin();
+    }
+
+    // daily_attendance: admin total; supervisor só sua equipe
+    match /daily_attendance/{docId} {
+      allow read: if isAdmin() || isRH() || (isSupervisor() && teamMatchesDoc(resource.data));
+      allow create: if isAdmin() || (isSupervisor() && request.resource.data.teamId == userTeamId());
+      allow update: if isAdmin() || (isSupervisor() && teamMatchesDoc(resource.data) && request.resource.data.teamId == resource.data.teamId);
+      allow delete: if isAdmin();
+    }
+
+    // evaluations: admin e RH total; supervisor lê/cria/edita só sua equipe
+    match /evaluations/{docId} {
+      allow read: if isAdmin() || isRH() || (isSupervisor() && teamMatchesDoc(resource.data));
+      allow write: if isAdmin() || isRH() || isSupervisor();
+    }
+
+    // purchases e suppliers: admin e RH
+    match /purchases/{docId} {
+      allow read, write: if isAdmin() || isRH();
+    }
+
+    match /suppliers/{docId} {
+      allow read, write: if isAdmin() || isRH();
+    }
+
+    match /products/{docId} {
+      allow read, write: if isAdmin() || isRH();
+    }
+
+    // holerites: admin e RH escrevem; cada colaborador lê o próprio
+    match /holerites/{docId} {
+      allow read: if isAdmin() || isRH() || (signedIn() && resource.data.employeeEmail == request.auth.token.email);
+      allow write: if isAdmin() || isRH();
+    }
+
+    // comunicados internos: todos autenticados leem; admin e RH escrevem
+    match /internal_comms/{docId} {
+      allow read: if signedIn();
+      allow write: if isAdmin() || isRH();
+    }
+
+    match /in_app_notifications/{docId} {
+      allow read: if signedIn() && resource.data.userEmail == request.auth.token.email;
+      allow write: if isAdmin() || isRH();
+    }
+
+    match /excecoes/{docId} {
+      allow read: if isAdmin() || isRH() || isSupervisor();
+      allow write: if isAdmin() || isRH();
+    }
+
+    match /employee_events/{docId} {
+      allow read: if isAdmin() || isRH() || isSupervisor();
+      allow write: if isAdmin() || isRH() || isSupervisor();
+    }
+
+    match /leaders/{docId} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    // Bloqueia tudo que não tiver regra explícita
     match /{document=**} {
       allow read, write: if false;
     }
   }
 }
-

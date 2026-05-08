@@ -4,25 +4,39 @@
 ============================================= */
 
 const DEMO_USERS = [
-  { email: 'admin@lumini.com', password: 'Luminiadmin',     role: 'admin',      name: 'Wesley',  supervisor: null },
-  { email: 'admin2@lumini',  password: 'Luminiadmin2',      role: 'admin',      name: 'Gustavo', supervisor: null },
-  { email: 'diretor@lumini', password: 'Luminidiretor',     role: 'boss',       name: 'Carlos',  supervisor: null },
-  { email: 'gerente@lumini', password: 'Luminigerente',     role: 'manager',    name: 'Samuel',  supervisor: null },
-  { email: 'sup1@lumini',    password: 'Luminisup1',        role: 'supervisor', name: 'Daniel',  supervisor: true },
-  { email: 'sup2@lumini',    password: 'Luminisup2',        role: 'supervisor', name: 'Kauê',    supervisor: true },
-  { email: 'sup3@lumini',    password: 'Luminisup3',        role: 'supervisor', name: 'Toni',    supervisor: true },
-  { email: 'sup4@lumini',    password: 'Luminisup4',        role: 'supervisor', name: 'Hélcio',  supervisor: true },
-  { email: 'rh@lumini',      password: 'Luminirh',          role: 'rh',         name: 'RH',      supervisor: null }
+  { email: 'admin@lumini.com',       password: 'Luminiadmin',     role: 'admin',      name: 'Wesley',  supervisor: null },
+  { email: 'admin2@lumini.com',      password: 'Luminiadmin2',   role: 'admin',      name: 'Gustavo', supervisor: null },
+  { email: 'lumini@lumini.com',      password: 'Luminilumini',   role: 'admin',      name: 'Lumini',  supervisor: null },
+  { email: 'wesley@lumini.com',      password: 'Lumini@Wesley',  role: 'admin',      name: 'Wesley',  supervisor: null },
+  { email: 'gustavo@lumini.com',     password: 'Lumini@Gustavo', role: 'admin',      name: 'Gustavo', supervisor: null },
+  { email: 'diretor@lumini.com',     password: 'Luminidiretor', role: 'boss',       name: 'Carlos',  supervisor: null },
+  { email: 'carlos@lumini.com',      password: 'Lumini@Carlos',  role: 'boss',       name: 'Carlos',  supervisor: null },
+  { email: 'gerente@lumini.com',     password: 'Luminigerente', role: 'manager',    name: 'Samuel',  supervisor: null },
+  { email: 'samuel@lumini.com',      password: 'Lumini@Samuel',  role: 'manager',    name: 'Samuel',  supervisor: null },
+  { email: 'rh@lumini.com',          password: 'Luminirh',       role: 'rh',         name: 'RH',      supervisor: null },
+  { email: 'rh2@lumini.com',         password: 'Luminirh2',      role: 'rh',         name: 'RH 2',    supervisor: null },
+  { email: 'sup1@lumini.com',        password: 'Luminisup1',     role: 'supervisor', name: 'Daniel',  supervisor: true },
+  { email: 'sup2@lumini.com',        password: 'Luminisup2',     role: 'supervisor', name: 'Kauê',    supervisor: true },
+  { email: 'sup3@lumini.com',        password: 'Luminisup3',     role: 'supervisor', name: 'Toni',    supervisor: true },
+  { email: 'sup4@lumini.com',        password: 'Luminisup4',     role: 'supervisor', name: 'Hélcio',  supervisor: true },
+  { email: 'gustavo.exp@lumini.com', password: 'Lumini@GExp',    role: 'supervisor', name: 'Gustavo Expedição', supervisor: true }
 ];
 
 /** E-mails antigos → oficiais (login, Firestore, localStorage, supervisor em employees). */
 window.LUMINI_LEGACY_EMAIL_MAP = {
-  'renato@lumini': 'sup1@lumini',
-  'heleno@lumini': 'sup2@lumini',
-  'toni@lumini': 'sup3@lumini',
-  'helcio@lumini': 'sup4@lumini',
-  'andre@lumini': 'gerente@lumini',
-  'carlos@lumini': 'diretor@lumini'
+  'renato@lumini': 'sup1@lumini.com',
+  'heleno@lumini': 'sup2@lumini.com',
+  'toni@lumini': 'sup3@lumini.com',
+  'helcio@lumini': 'sup4@lumini.com',
+  'andre@lumini': 'gerente@lumini.com',
+  'carlos@lumini': 'diretor@lumini.com',
+  'samuel@lumini.com.br': 'samuel@lumini.com',
+  'kaue@lumini.com.br': 'sup2@lumini.com',
+  'daniel@lumini.com.br': 'sup1@lumini.com',
+  'tony@lumini.com.br': 'sup3@lumini.com',
+  'helcio@lumini.com.br': 'sup4@lumini.com',
+  'carlos@lumini.com.br': 'carlos@lumini.com',
+  'rh@lumini.com.br': 'rh@lumini.com'
 };
 
 // Funcionários serão adicionados diretamente no sistema

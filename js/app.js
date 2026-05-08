@@ -493,15 +493,35 @@ function _initFirebaseAuthGuard() {
   // Token refresh/expiração: expulsa imediatamente quando virar null
   if (typeof onToken === 'function') {
     onToken(auth, (user) => {
-      if (!user && !isLogin) _authHardKickToLogin();
+      if (!user && !isLogin) {
+        const s = _readCpUser();
+        if (!_hasBasicSessionUser(s)) _authHardKickToLogin();
+      }
     }, () => {
-      if (!isLogin) _authHardKickToLogin();
+      if (!isLogin) {
+        const s = _readCpUser();
+        if (!_hasBasicSessionUser(s)) _authHardKickToLogin();
+      }
     });
   }
 
   onAuth(auth, async (user) => {
     authResolvedOnce = true;
     if (!user) {
+      const fromSession = _readCpUser();
+      if (_hasBasicSessionUser(fromSession)) {
+        currentUser = fromSession;
+        _ntStartPrefetchRhCsv();
+        const onAppOnly = document.getElementById('app') && !document.getElementById('page-login');
+        if (isLogin || !onAppOnly) {
+          window.location.replace('app.html');
+          return;
+        }
+        _authShowBody();
+        _ntSetAuthTransition(false);
+        startApp();
+        return;
+      }
       if (!isLogin) {
         _authHardKickToLogin();
         if (window.__ntShouldRedirectToLogin) window.location.replace('login.html');
@@ -610,7 +630,8 @@ window.refreshCurrentPage = function() {
 };
 
 // ─── LOGIN ────────────────────────────────────
-// Autenticação 100% por e-mail. Cruza o e-mail digitado com:
+// Autenticação por e-mail + senha (auth-config) e perfil em Firestore (users).
+// Cruza o e-mail digitado com:
 //   1. Listas de papéis em js/auth-config.js (admin / boss / manager / rh)
 //   2. Líderes "extras" (mapeados em auth-config) — ex.: GUSTAVO EXPEDIÇÃO
 //   3. Coluna EMAIL do Rh.Lumini.csv → se o colaborador é líder de outros,
@@ -640,7 +661,6 @@ async function doLogin() {
   }
 
   const email = String(emailRaw || '').trim().toLowerCase();
-  // Garante que o campo reflita exatamente o valor que vai para o Firebase Auth.
   if (emailInput && email && emailInput.value !== email) emailInput.value = email;
 
   // 1) Validação de formato
@@ -656,19 +676,9 @@ async function doLogin() {
     return;
   }
 
-  // 3) Senha (modo DEMO)
-  // - Se houver senha cadastrada para o e-mail, exige correspondência.
-  // - Se não houver, aceita qualquer senha não-vazia (modo demo/dev).
-  const expected = cfg.getDemoPassword(email);
-  if (expected != null) {
-    if (pass !== expected) { showError('E-mail ou senha incorretos.'); return; }
-  } else if (!pass) {
-    showError('Informe sua senha.'); return;
-  }
-
   hideError();
 
-  // 4) Monta o usuário em estado global
+  // 3) Monta o usuário em estado global
   // Para supervisor: `email` recebe a chave da equipe (compat com filtros).
   // Para os demais: `email` é o próprio e-mail.
   const user = (auth.role === 'supervisor')
@@ -686,86 +696,104 @@ async function doLogin() {
         role:       auth.role
       };
 
-  // Firebase Auth (fonte de verdade) — efetua login e deixa o guard assumir
-  const signIn = window._fbSignInWithEmailAndPassword;
-  const fbAuth = window._fbAuth;
-  if (!fbAuth || typeof signIn !== 'function') {
-    showError('Erro de conexão com autenticação. Recarregue a página.');
+  const fetchProfile = window._ntFetchProfileByEmail;
+  if (typeof fetchProfile !== 'function') {
+    showError('Erro de conexão com o banco. Recarregue a página.');
     return;
   }
 
-  // Mostra a transição de autenticação (barra de progresso no topo)
   window._ntSetAuthTransition?.(true);
   try {
-    await signIn(fbAuth, email, pass);
+    const fbAuth = window._fbAuth;
+    const signIn = window._fbSignInWithEmailAndPassword;
+    if (!fbAuth || typeof signIn !== 'function') {
+      showError('Erro de autenticação. Recarregue a página.');
+      return;
+    }
+    try {
+      await signIn(fbAuth, email, pass);
+    } catch (error) {
+      const code = String(error?.code || '').toLowerCase();
+      if (['auth/wrong-password', 'auth/invalid-credential'].includes(code)) {
+        showError('Senha incorreta.');
+      } else if (code === 'auth/user-not-found') {
+        showError('E-mail não encontrado.');
+      } else if (code === 'auth/too-many-requests') {
+        showError('Muitas tentativas. Tente mais tarde.');
+      } else if (code === 'auth/network-request-failed') {
+        showError('Falha de rede. Verifique sua internet.');
+      } else {
+        showError('Erro ao autenticar. Tente novamente.');
+      }
+      window._ntSetAuthTransition?.(false);
+      return;
+    }
+
+    let profile = null;
+    try {
+      profile = await fetchProfile(email);
+    } catch (e) {
+      if (!_ntIsFirestorePermissionDenied(e)) {
+        console.error(e);
+        showError('Não foi possível validar o acesso. Tente novamente.');
+        return;
+      }
+      profile = null;
+    }
+
+    if (!profile) {
+      try {
+        const { getApp } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js');
+        const { getFirestore, collection, addDoc } = await import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js');
+        const db = getFirestore(getApp());
+        await addDoc(collection(db, 'users'), {
+          email,
+          role: String(auth.role || '').trim() || 'supervisor',
+          name: String(auth.name || '').trim() || email,
+          createdAt: new Date()
+        });
+      } catch (e) {
+        window._ntSetAuthTransition?.(false);
+        const ok = confirm(
+          'Não foi possível sincronizar com o banco de dados. Deseja entrar no modo de demonstração?'
+        );
+        if (ok) {
+          try { sessionStorage.setItem('lumini_demo_mode', '1'); } catch (_) {}
+          const adminResolved = cfg.resolveAuthForEmail('admin@lumini.com');
+          const demoAdmin = adminResolved
+            ? {
+                email: adminResolved.email,
+                loginEmail: adminResolved.email,
+                name: adminResolved.name,
+                role: 'admin'
+              }
+            : {
+                email: 'admin@lumini.com',
+                loginEmail: 'admin@lumini.com',
+                name: 'Administrador',
+                role: 'admin'
+              };
+          currentUser = demoAdmin;
+          try { sessionStorage.setItem('cp_user', JSON.stringify(demoAdmin)); } catch (_) {}
+          _persistSessionExtras(demoAdmin);
+          window.location.replace('app.html');
+        } else {
+          showError('Não foi possível conectar ao banco. Tente novamente mais tarde.');
+        }
+        return;
+      }
+      try {
+        profile = await fetchProfile(email);
+      } catch (_) {
+        /* doc criado; leitura pode falhar por regras — segue com sessão local */
+      }
+    }
+
+    try { sessionStorage.removeItem('lumini_demo_mode'); } catch (_) {}
     currentUser = user;
     sessionStorage.setItem('cp_user', JSON.stringify(user));
     _persistSessionExtras(user);
     window.location.replace('app.html');
-  } catch (error) {
-    const code = String(error?.code || '').toLowerCase();
-    const message = String(error?.message || '');
-    const statusCode = Number(error?.customData?.statusCode ?? error?.status);
-    const isApiKeyErr =
-      code === 'auth/api-key-not-valid' ||
-      code === 'auth/invalid-api-key';
-    const isHttp400 =
-      statusCode === 400 ||
-      /(^|[\s:])400([\s:]|$)/i.test(message) ||
-      /bad request/i.test(message);
-    // Evita oferecer modo demo para falhas normais de senha/usuário (também HTTP 400).
-    const isCredentialAuthFailure = [
-      'auth/wrong-password',
-      'auth/invalid-credential',
-      'auth/user-not-found',
-      'auth/invalid-email',
-      'auth/user-disabled',
-      'auth/missing-password',
-      'auth/too-many-requests'
-    ].includes(code);
-
-    const isDemoRecoverable = isApiKeyErr || (isHttp400 && !isCredentialAuthFailure);
-
-    if (isDemoRecoverable) {
-      const ok = confirm(
-        'Erro de conexão com o Google. Deseja entrar no modo de demonstração?'
-      );
-      if (ok) {
-        try { sessionStorage.setItem('lumini_demo_mode', '1'); } catch (_) {}
-        const adminResolved = cfg.resolveAuthForEmail('admin@lumini.com');
-        const demoAdmin = adminResolved
-          ? {
-              email: adminResolved.email,
-              loginEmail: adminResolved.email,
-              name: adminResolved.name,
-              role: 'admin'
-            }
-          : {
-              email: 'admin@lumini.com',
-              loginEmail: 'admin@lumini.com',
-              name: 'Administrador',
-              role: 'admin'
-            };
-        currentUser = demoAdmin;
-        try { sessionStorage.setItem('cp_user', JSON.stringify(demoAdmin)); } catch (_) {}
-        _persistSessionExtras(demoAdmin);
-        window.location.replace('app.html');
-        return;
-      }
-      showError('Não foi possível conectar. Tente novamente mais tarde.');
-    } else if (code === 'auth/network-request-failed') {
-      showError('Falha de rede ao conectar no Firebase. Verifique sua internet e tente novamente.');
-    } else if (code === 'auth/wrong-password' || code === 'auth/invalid-credential') {
-      showError('Senha incorreta.');
-    } else if (code === 'auth/user-not-found') {
-      showError('Usuário não encontrado para este e-mail.');
-    } else if (code === 'auth/invalid-email') {
-      showError('E-mail inválido.');
-    } else if (code === 'auth/too-many-requests') {
-      showError('Muitas tentativas. Aguarde um pouco e tente novamente.');
-    } else {
-      showError('E-mail ou senha incorretos.');
-    }
   } finally {
     window._ntSetAuthTransition?.(false);
   }
@@ -857,15 +885,33 @@ function applyUserTheme() {
     'sup2@lumini':              'theme-sup2',
     'sup3@lumini':              'theme-sup1',
     'sup4@lumini':              'theme-sup2',
+    'sup1@lumini.com':          'theme-sup1',
+    'sup2@lumini.com':          'theme-sup2',
+    'sup3@lumini.com':          'theme-sup1',
+    'sup4@lumini.com':          'theme-sup2',
+    'gustavo.exp@lumini.com':   'theme-sup1',
     'admin@lumini.com':         'theme-admin',
     'admin2@lumini':            'theme-admin',
+    'admin2@lumini.com':        'theme-admin',
+    'wesley@lumini.com':        'theme-admin',
+    'gustavo@lumini.com':       'theme-admin',
     'gerente@lumini':           'theme-andre',
+    'gerente@lumini.com':       'theme-andre',
     'diretor@lumini':           'theme-carlos',
+    'diretor@lumini.com':       'theme-carlos',
+    'carlos@lumini.com':        'theme-carlos',
+    'samuel@lumini.com':        'theme-andre',
     'rh@lumini':                'theme-rh',
+    'rh@lumini.com':            'theme-rh',
+    'rh2@lumini.com':           'theme-rh',
     'daniel@lumini.com.br':     'theme-sup1',
+    'daniel@lumini.com':        'theme-sup1',
     'kaue@lumini.com.br':       'theme-sup2',
+    'kaue@lumini.com':          'theme-sup2',
     'tony@lumini.com.br':       'theme-sup1',
+    'tony@lumini.com':          'theme-sup1',
     'helcio@lumini.com.br':     'theme-sup2',
+    'helcio@lumini.com':        'theme-sup2',
     'samuel@lumini.com.br':     'theme-andre',
     'carlos@lumini.com.br':     'theme-carlos',
     'rh@lumini.com.br':         'theme-rh',
@@ -898,20 +944,10 @@ function doLogout() {
     if (_notifCheckInterval) { clearInterval(_notifCheckInterval); _notifCheckInterval = null; }
     if (window._ntUnsubscribeInAppNotifications) window._ntUnsubscribeInAppNotifications();
     currentUser = null;
-    _authHardKickToLogin();
+    window.location.replace('login.html');
   };
 
-  // Firebase Auth é a fonte de verdade: sair precisa dar signOut.
-  const auth = window._fbAuth;
-  const signOut = window._fbSignOut;
-  if (auth && typeof signOut === 'function') {
-    Promise.resolve()
-      .then(() => signOut(auth))
-      .catch(() => {})
-      .finally(finalize);
-  } else {
-    finalize();
-  }
+  finalize();
 }
 
 Object.defineProperty(window, 'currentUser', { get: () => currentUser, set: v => { currentUser = v; } });

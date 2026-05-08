@@ -12,7 +12,7 @@
    ▸ Acesso ADMIN/BOSS/MANAGER/RH NÃO depende do CSV — está vinculado
      às listas abaixo. Para liberar/revogar acesso, edite as listas.
 
-   ⚠️  Em produção, mover senhas para Firebase Auth ou backend seguro.
+   ▸ Senhas: apenas Firebase Authentication (Console → Authentication → Users).
 ============================================= */
 
 (function () {
@@ -31,28 +31,28 @@
   // Acesso macro / administrativo
   const ADMIN_EMAILS = [
     'admin@lumini.com',
-    'admin2@lumini',
-    'lumini@admin',
-    'wesley@lumini.com.br',
-    'gustavo@lumini.com.br'
+    'admin2@lumini.com',
+    'lumini@lumini.com',
+    'wesley@lumini.com',
+    'gustavo@lumini.com'
   ].map(lower);
 
   // Diretor Geral — aprovação final de promoções
   const BOSS_EMAILS = [
-    'diretor@lumini',
-    'carlos@lumini.com.br'
+    'diretor@lumini.com',
+    'carlos@lumini.com'
   ].map(lower);
 
   // Gerente de Produção — aprovação intermediária + visão de equipes
   const MANAGER_EMAILS = [
-    'gerente@lumini',
-    'samuel@lumini.com.br'
+    'gerente@lumini.com',
+    'samuel@lumini.com'
   ].map(lower);
 
   // Recursos Humanos
   const RH_EMAILS = [
-    'rh@lumini',
-    'rh@lumini.com.br'
+    'rh@lumini.com',
+    'rh2@lumini.com'
   ].map(lower);
 
   // ─── Líderes "extra" ────────────────────────────
@@ -61,28 +61,11 @@
   // própria) — ou líderes com e-mail diferente do EMAIL preenchido no CSV.
   // Mapa: email (lower) → { name (display), leaderKey (LÍDER normalizado) }
   const EXTRA_LEADER_EMAILS = {
-    'sup1@lumini':                 { name: 'Daniel',            leaderKey: 'DANIEL' },
-    'sup2@lumini':                 { name: 'Kauê',              leaderKey: 'KAUE' },
-    'sup3@lumini':                 { name: 'Toni',              leaderKey: 'TONI' },
-    'sup4@lumini':                 { name: 'Hélcio',            leaderKey: 'HELCIO' },
-    'gustavo.exp@lumini.com.br':   { name: 'Gustavo Expedição', leaderKey: 'GUSTAVO EXPEDICAO' }
-  };
-
-  // ─── Senhas DEMO (apenas DEV) ───────────────────
-  // Em produção: substituir por Firebase Authentication ou backend.
-  // Se um e-mail não estiver aqui, qualquer senha não-vazia é aceita
-  // (modo "ambiente sem auth" — útil para testes locais e demo).
-  const DEMO_PASSWORDS = {
-    'admin@lumini.com': 'Luminiadmin',
-    'admin2@lumini':   'Luminiadmin2',
-    'lumini@admin':    'Luminilumini',
-    'diretor@lumini':  'Luminidiretor',
-    'gerente@lumini':  'Luminigerente',
-    'rh@lumini':       'Luminirh',
-    'sup1@lumini':     'Luminisup1',
-    'sup2@lumini':     'Luminisup2',
-    'sup3@lumini':     'Luminisup3',
-    'sup4@lumini':     'Luminisup4'
+    'sup1@lumini.com':        { name: 'Daniel',            leaderKey: 'DANIEL' },
+    'sup2@lumini.com':        { name: 'Kauê',              leaderKey: 'KAUE' },
+    'sup3@lumini.com':        { name: 'Toni',              leaderKey: 'TONI' },
+    'sup4@lumini.com':        { name: 'Hélcio',            leaderKey: 'HELCIO' },
+    'gustavo.exp@lumini.com': { name: 'Gustavo Expedição', leaderKey: 'GUSTAVO EXPEDICAO' }
   };
 
   // RegEx pragmática (não exigimos TLD para preservar e-mails legados @lumini)
@@ -95,14 +78,6 @@
    */
   function isValidEmail(email) {
     return EMAIL_RE.test(String(email || '').trim());
-  }
-
-  /**
-   * Retorna a senha esperada (DEMO) para um e-mail, ou null se não houver
-   * senha cadastrada (qualquer senha não-vazia será aceita nesse caso).
-   */
-  function getDemoPassword(email) {
-    return DEMO_PASSWORDS[lower(email)] || null;
   }
 
   /**
@@ -184,7 +159,6 @@
     RH_EMAILS,
     EXTRA_LEADER_EMAILS,
     isValidEmail,
-    getDemoPassword,
     resolveAuthForEmail
   };
 })();
