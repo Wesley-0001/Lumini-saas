@@ -39,15 +39,18 @@ import {
   doc
 } from 'https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js';
 
-// ─── Mesma configuração do projeto que firebase-db.js (Firestore compartilhado) ───
-const firebaseConfig = {
-  apiKey:            'AIzaSyAVB6QZCUE4fUyrFMh7Oex0rcNRLVP9uI',
-  authDomain:        'lumini-sabor-nt.firebaseapp.com',
-  projectId:         'lumini-sabor-nt',
-  storageBucket:     'lumini-sabor-nt.firebasestorage.app',
-  messagingSenderId: '622572697165',
-  appId:             '1:622572697165:web:8b2d201870b39dc88b0e04'
-};
+// ─── Configuração do Firebase ────────────────────────────────────
+// Fonte única de verdade: js/firebase-config.js (script clássico, carregado
+// ANTES deste módulo) define `window.firebaseConfig`. Garante que portal,
+// login e app usem rigorosamente o mesmo projeto/chave.
+const firebaseConfig = window.firebaseConfig;
+
+if (!firebaseConfig || !firebaseConfig.apiKey) {
+  const msg = '[Portal] window.firebaseConfig não encontrada. ' +
+              'Verifique se js/firebase-config.js é carregado ANTES de js/portal-app.js em portal.html.';
+  console.error(msg);
+  throw new Error(msg);
+}
 
 const app = initializeApp(firebaseConfig);
 const db  = getFirestore(app);

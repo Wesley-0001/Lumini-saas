@@ -12,27 +12,110 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.4.0/css/all.min.css" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Playfair+Display:ital,wght@0,400;0,500;0,600;0,700&family=Sora:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    /* Auth Guard / Feedback visual controlado via js/app.js */
+
+    /* Barra de progresso discreta (validação de sessão) */
+    .nt-auth-progress {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 3px;
+      z-index: 99999;
+      background: transparent;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity .2s ease;
+    }
+    .nt-auth-progress.is-visible { opacity: 1; }
+    .nt-auth-progress::before {
+      content: "";
+      display: block;
+      height: 100%;
+      width: 40%;
+      background: linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,.85), rgba(255,255,255,0));
+      animation: ntAuthBar 1.1s ease-in-out infinite;
+      filter: drop-shadow(0 0 8px rgba(255,255,255,.25));
+    }
+    @keyframes ntAuthBar {
+      0%   { transform: translateX(-60%); opacity: .65; }
+      50%  { opacity: 1; }
+      100% { transform: translateX(260%); opacity: .65; }
+    }
+
+    /* Skeleton loaders */
+    .nt-skel { position: relative; overflow: hidden; background: rgba(148, 163, 184, .22); border-radius: 12px; }
+    .dark-mode .nt-skel { background: rgba(148, 163, 184, .14); }
+    .nt-skel::after {
+      content: "";
+      position: absolute;
+      inset: 0;
+      transform: translateX(-60%);
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,.35), transparent);
+      animation: ntSkelPulse 1.15s ease-in-out infinite;
+    }
+    .dark-mode .nt-skel::after { background: linear-gradient(90deg, transparent, rgba(255,255,255,.18), transparent); }
+    @keyframes ntSkelPulse {
+      0%   { transform: translateX(-60%); opacity: .65; }
+      50%  { opacity: 1; }
+      100% { transform: translateX(260%); opacity: .65; }
+    }
+    .nt-skel-line { height: 12px; border-radius: 999px; }
+    .nt-skel-card { height: 92px; }
+    .nt-skel-chart { height: 280px; }
+    .nt-skel-chart-sm { height: 200px; }
+    .nt-skel-heatmap { height: 260px; }
+    .nt-skel-grid { display: grid; gap: 12px; }
+    .nt-skel-grid.cards { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    @media (max-width: 980px) { .nt-skel-grid.cards { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+    @media (max-width: 560px) { .nt-skel-grid.cards { grid-template-columns: 1fr; } }
+
+    /* Overlay de skeleton por página (não bloqueia layout) */
+    .nt-page-skeleton {
+      display: none;
+      margin-top: 12px;
+    }
+    .nt-page-skeleton.is-visible { display: block; }
+
+    /* Tela de erro específica: perfil não configurado */
+    .nt-profile-error {
+      position: fixed;
+      inset: 0;
+      z-index: 99998;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      background: rgba(2, 6, 23, .75);
+      padding: 20px;
+    }
+    .nt-profile-error.is-visible { display: flex; }
+    .nt-profile-error-card {
+      width: min(560px, 100%);
+      background: #0b1220;
+      border: 1px solid rgba(255,255,255,.12);
+      border-radius: 16px;
+      padding: 22px 20px;
+      color: #fff;
+      box-shadow: 0 20px 50px rgba(0,0,0,.55);
+    }
+    .nt-profile-error-title { margin: 0 0 6px 0; font-size: 18px; font-weight: 800; letter-spacing: .1px; }
+    .nt-profile-error-text { margin: 0 0 16px 0; font-size: 13.5px; opacity: .88; line-height: 1.45; }
+    .nt-profile-error-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+    .nt-profile-error-badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      font-size: 12px; padding: 8px 10px;
+      border-radius: 999px;
+      background: rgba(255,255,255,.08);
+      border: 1px solid rgba(255,255,255,.12);
+      margin-bottom: 12px;
+    }
+  </style>
 </head>
-<body>
-<script>
-(function () {
-  try {
-    var raw = sessionStorage.getItem('cp_user');
-    if (!raw) { window.location.replace('login.html'); return; }
-    var o = JSON.parse(raw);
-    if (!o || typeof o !== 'object') throw new Error('invalid');
-  } catch (e) {
-    try {
-      sessionStorage.removeItem('cp_user');
-      sessionStorage.removeItem('lumini_login_email');
-      sessionStorage.removeItem('lumini_role');
-      localStorage.removeItem('lumini_login_email');
-      localStorage.removeItem('lumini_role');
-    } catch (_) {}
-    window.location.replace('login.html');
-  }
-})();
-</script>
+<body style="visibility:hidden">
+
+<!-- Barra discreta de validação (Auth) -->
+<div id="nt-auth-progress" class="nt-auth-progress" aria-hidden="true"></div>
 
 <!-- TELA DE LOADING -->
 <div id="firebase-loading" class="firebase-loading-screen">
@@ -41,6 +124,19 @@
     <div class="firebase-spinner"></div>
     <p class="firebase-loading-text">Conectando ao sistema...</p>
     <p class="firebase-loading-sub">Aguarde um momento ☁️</p>
+  </div>
+</div>
+
+<!-- ERRO: usuário autenticado, mas perfil não configurado -->
+<div id="nt-profile-error-screen" class="nt-profile-error" role="dialog" aria-modal="true" aria-labelledby="nt-profile-error-title">
+  <div class="nt-profile-error-card">
+    <div class="nt-profile-error-badge"><i class="fas fa-user-shield"></i> Acesso validado</div>
+    <h3 class="nt-profile-error-title" id="nt-profile-error-title">Usuário autenticado, mas perfil não configurado.</h3>
+    <p class="nt-profile-error-text">Seu login foi confirmado no Firebase, porém não encontramos seu perfil no Firestore. Contate o RH para configurar o acesso.</p>
+    <div class="nt-profile-error-actions">
+      <button class="btn-primary" type="button" onclick="doLogout()"><i class="fas fa-right-from-bracket"></i> Sair</button>
+      <button class="btn-outline" type="button" onclick="location.reload()"><i class="fas fa-rotate"></i> Tentar novamente</button>
+    </div>
   </div>
 </div>
 
@@ -314,6 +410,25 @@
         <h2><i class="fas fa-tachometer-alt"></i> Dashboard</h2>
         <span class="page-sub">Visão geral do sistema de carreira</span>
       </div>
+
+      <!-- Skeleton: cards + charts (mostra enquanto dados/render não finalizar) -->
+      <div id="skel-admin-dashboard" class="nt-page-skeleton" aria-hidden="true">
+        <div class="nt-skel-grid cards" style="margin-bottom:12px">
+          <div class="nt-skel nt-skel-card"></div>
+          <div class="nt-skel nt-skel-card"></div>
+          <div class="nt-skel nt-skel-card"></div>
+          <div class="nt-skel nt-skel-card"></div>
+        </div>
+        <div class="nt-skel-grid" style="grid-template-columns: 2fr 1fr;">
+          <div class="nt-skel nt-skel-chart"></div>
+          <div class="nt-skel nt-skel-chart"></div>
+        </div>
+        <div class="nt-skel-grid" style="grid-template-columns: 2fr 1fr; margin-top:12px">
+          <div class="nt-skel nt-skel-chart-sm"></div>
+          <div class="nt-skel nt-skel-chart-sm"></div>
+        </div>
+      </div>
+
       <div class="cards-grid">
         <div class="stat-card blue"><div class="stat-icon"><i class="fas fa-users"></i></div><div class="stat-info"><span class="stat-value" id="stat-total">0</span><span class="stat-label">Total de Funcionários</span></div></div>
         <div class="stat-card orange"><div class="stat-icon"><i class="fas fa-clock"></i></div><div class="stat-info"><span class="stat-value" id="stat-apt">0</span><span class="stat-label">Aptos para Avaliação</span></div></div>
@@ -758,7 +873,9 @@
                 <span class="da-hm-leg"><span class="da-hm-dot da-hm-dot--neu"></span> Sem registro</span>
               </div>
             </div>
-            <div class="da-heatmap-wrap" id="da-heatmap-wrap"></div>
+            <div class="da-heatmap-wrap" id="da-heatmap-wrap">
+              <div id="skel-da-heatmap" class="nt-skel nt-skel-heatmap" style="display:none"></div>
+            </div>
           </div>
         </section>
 
@@ -1105,7 +1222,7 @@
 
         <div class="search-bar" style="margin:0;flex:1;min-width:220px">
           <i class="fas fa-search"></i>
-          <input type="text" id="comms-search" placeholder="Buscar por título, mensagem, remetente..." oninput="window._commsRender && window._commsRender()" />
+          <input type="text" id="comms-search" placeholder="Buscar por título, mensagem, remetente..." oninput="window._commsRenderDebounced ? window._commsRenderDebounced() : (window._commsRender && window._commsRender())" />
         </div>
       </div>
 
@@ -1118,6 +1235,7 @@
 
 <!-- Scripts -->
 <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+<script src="js/firebase-config.js"></script>
 <script src="js/data.js"></script>
 <script src="js/rh-data.js"></script>
 <script type="module" src="js/firebase-db.js"></script>

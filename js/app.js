@@ -47,9 +47,468 @@ let chartStatus = null;
 let chartPie = null;
 let chartEval = null;
 
+// ─── DEBUG / LOGGING ─────────────────────────
+function _ntReadDebugFlag() {
+  try {
+    const v = localStorage.getItem('LUMINI_DEBUG');
+    if (v == null) return false;
+    const s = String(v).trim().toLowerCase();
+    return s === '1' || s === 'true' || s === 'on' || s === 'yes';
+  } catch (_) {
+    return false;
+  }
+}
+window.LUMINI_DEBUG = _ntReadDebugFlag();
+window._ntRefreshDebugFlag = function() { window.LUMINI_DEBUG = _ntReadDebugFlag(); };
+window.luminiLog = function(...args) { if (window.LUMINI_DEBUG) console.log(...args); };
+window.luminiWarn = function(...args) { if (window.LUMINI_DEBUG) console.warn(...args); };
+
+// Diagnóstico: confirma se a config global do Firebase está disponível.
+// Como `js/firebase-config.js` é script clássico e carregado ANTES deste,
+// `window.firebaseConfig` deve estar populado neste ponto. Se não estiver,
+// a ordem dos <script> no HTML está errada.
+try {
+  const cfg = window.firebaseConfig;
+  if (!cfg || !cfg.apiKey) {
+    console.error('[Lumini] firebaseConfig ausente no boot do app.js. ' +
+                  'Verifique se js/firebase-config.js é carregado ANTES de js/app.js.');
+  } else if (window.LUMINI_DEBUG) {
+    console.log('[Lumini] firebaseConfig OK:', {
+      project: cfg.projectId,
+      apiKeyPrefix: String(cfg.apiKey).slice(0, 6)
+    });
+  }
+} catch (e) {
+  console.warn('[Lumini] Falha ao ler window.firebaseConfig:', e);
+}
+
+// ─── GLOBAL ERROR INTERCEPTOR (Offline + Permission Denied) ─────
+function _ntInitGlobalErrorInterceptor() {
+  if (window.__ntGlobalInterceptorInstalled) return;
+  window.__ntGlobalInterceptorInstalled = true;
+
+  const BANNER_ID = 'nt-global-error-banner';
+  let hideTimer = null;
+
+  const ensureBanner = () => {
+    let el = document.getElementById(BANNER_ID);
+    if (el) return el;
+    el = document.createElement('div');
+    el.id = BANNER_ID;
+    el.style.position = 'fixed';
+    el.style.left = '12px';
+    el.style.right = '12px';
+    el.style.bottom = '12px';
+    el.style.zIndex = '99999';
+    el.style.padding = '10px 12px';
+    el.style.borderRadius = '10px';
+    el.style.fontSize = '13px';
+    el.style.fontWeight = '600';
+    el.style.boxShadow = '0 8px 24px rgba(0,0,0,0.18)';
+    el.style.display = 'none';
+    el.style.backdropFilter = 'blur(6px)';
+    el.style.webkitBackdropFilter = 'blur(6px)';
+    el.style.cursor = 'default';
+
+    // Clique para fechar (discreto)
+    el.addEventListener('click', () => { el.style.display = 'none'; }, { passive: true });
+
+    document.body.appendChild(el);
+    return el;
+  };
+
+  const showBanner = (message, kind) => {
+    const el = ensureBanner();
+    if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+
+    const k = String(kind || 'info');
+    if (k === 'error') {
+      el.style.background = 'rgba(180, 30, 30, 0.92)';
+      el.style.color = '#fff';
+    } else if (k === 'warn') {
+      el.style.background = 'rgba(180, 110, 10, 0.92)';
+      el.style.color = '#fff';
+    } else {
+      el.style.background = 'rgba(30, 30, 30, 0.86)';
+      el.style.color = '#fff';
+    }
+
+    el.textContent = String(message || '').trim();
+    el.style.display = el.textContent ? 'block' : 'none';
+
+    // Auto-hide em mensagens não-offline
+    if (k !== 'offline' && el.style.display === 'block') {
+      hideTimer = setTimeout(() => { el.style.display = 'none'; }, 6000);
+    }
+  };
+
+  const hideBanner = () => {
+    const el = document.getElementById(BANNER_ID);
+    if (el) el.style.display = 'none';
+  };
+
+  const isFirebasePermissionDenied = (err) => {
+    const code = String(err?.code || err?.name || '').toLowerCase();
+    const msg = String(err?.message || '').toLowerCase();
+    return code.includes('permission-denied') || msg.includes('permission denied');
+  };
+
+  const isFirebaseOffline = (err) => {
+    if (navigator && navigator.onLine === false) return true;
+    const code = String(err?.code || err?.name || '').toLowerCase();
+    const msg = String(err?.message || '').toLowerCase();
+    return code.includes('unavailable') || msg.includes('offline') || msg.includes('network') || msg.includes('failed to get document');
+  };
+
+  const handleError = (err) => {
+    if (!err) return;
+
+    if (isFirebasePermissionDenied(err)) {
+      try {
+        const who = window.currentUser ? { role: window.currentUser.role, email: window.currentUser.loginEmail || window.currentUser.email } : null;
+        console.warn('[SECURITY] Permission denied:', { page: window.currentPage, who, err: { code: err.code, message: err.message } });
+      } catch (_) {}
+      showBanner('Acesso negado: você não tem permissão para ver estes dados.', 'warn');
+      return;
+    }
+
+    if (isFirebaseOffline(err)) {
+      showBanner('Você está offline. Algumas funções podem estar limitadas.', 'offline');
+    }
+  };
+
+  // Promises não tratadas (principal fonte dos “silenciosos” em Firebase)
+  window.addEventListener('unhandledrejection', (ev) => {
+    handleError(ev?.reason);
+  });
+
+  // Erros em runtime (best-effort)
+  window.addEventListener('error', (ev) => {
+    handleError(ev?.error);
+  });
+
+  // Eventos de conectividade para manter banner consistente
+  window.addEventListener('offline', () => {
+    showBanner('Você está offline. Algumas funções podem estar limitadas.', 'offline');
+  });
+  window.addEventListener('online', () => {
+    hideBanner();
+  });
+
+  // Estado inicial
+  try {
+    if (navigator && navigator.onLine === false) {
+      // aguarda DOM para injetar sem risco
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', () => showBanner('Você está offline. Algumas funções podem estar limitadas.', 'offline'), { once: true });
+      } else {
+        showBanner('Você está offline. Algumas funções podem estar limitadas.', 'offline');
+      }
+    }
+  } catch (_) {}
+}
+
+// Instala cedo para capturar falhas durante o boot.
+try {
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _ntInitGlobalErrorInterceptor, { once: true });
+  } else {
+    _ntInitGlobalErrorInterceptor();
+  }
+} catch (_) {}
+
+// ─── DEBOUNCE ────────────────────────────────
+window._ntDebounce = function(fn, ms) {
+  let t = null;
+  return function(...args) {
+    if (t) clearTimeout(t);
+    t = setTimeout(() => fn.apply(this, args), Math.max(0, Number(ms) || 0));
+  };
+};
+
+// ─── MEMORY / CLEANUP ────────────────────────
+window._ntDestroyCharts = function() {
+  const toDestroy = [
+    { get: () => chartStatus, set: v => { chartStatus = v; } },
+    { get: () => chartPie, set: v => { chartPie = v; } },
+    { get: () => chartEval, set: v => { chartEval = v; } },
+    { get: () => window._chartByRole, set: v => { window._chartByRole = v; } },
+    { get: () => window._chartByTeam, set: v => { window._chartByTeam = v; } },
+    { get: () => window._bossChartTeam, set: v => { window._bossChartTeam = v; } },
+    { get: () => window._bossChartStatus, set: v => { window._bossChartStatus = v; } },
+    { get: () => window.chartHRTurnover, set: v => { window.chartHRTurnover = v; } },
+  ];
+  for (const h of toDestroy) {
+    try {
+      const inst = h.get();
+      if (inst && typeof inst.destroy === 'function') inst.destroy();
+      h.set(null);
+    } catch (_) {}
+  }
+  // Hooks opcionais por módulo/página
+  const fns = window._ntPageCleanupFns;
+  if (Array.isArray(fns)) {
+    for (const fn of fns) {
+      try { if (typeof fn === 'function') fn(); } catch (_) {}
+    }
+  }
+};
+
+// ─── VISUAL FEEDBACK (Auth + Skeletons) ───────
+function _ntSetAuthTransition(isOn) {
+  const bar = document.getElementById('nt-auth-progress');
+  if (!bar) return;
+  bar.classList.toggle('is-visible', !!isOn);
+}
+
+function _ntShowProfileNotConfiguredScreen() {
+  const scr = document.getElementById('nt-profile-error-screen');
+  if (scr) scr.classList.add('is-visible');
+}
+
+function _ntSetPageSkeleton(page, isOn) {
+  const map = {
+    'admin-dashboard': 'skel-admin-dashboard',
+    'supervisor-team-attendance': 'skel-da-heatmap'
+  };
+  const id = map[String(page || '')];
+  if (!id) return;
+  const el = document.getElementById(id);
+  if (!el) return;
+  // Para o heatmap, usamos display inline, não wrapper de página
+  if (id === 'skel-da-heatmap') {
+    el.style.display = isOn ? '' : 'none';
+    return;
+  }
+  el.classList.toggle('is-visible', !!isOn);
+}
+
+// Prefetch do RH (CSV) para ganhar tempo pós-login
+function _ntStartPrefetchRhCsv() {
+  if (window._ntRhCsvPrefetchPromise) return window._ntRhCsvPrefetchPromise;
+  const url = String(window.LUMINI_EMPLOYEES_CSV_URL || 'Rh.Lumini.csv').trim();
+  window._ntRhCsvPrefetchPromise = fetch(url, { method: 'GET', cache: 'no-store' })
+    .then(res => {
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      return res.text();
+    })
+    .then(text => {
+      window._ntRhCsvPrefetchedText = text;
+      return text;
+    })
+    .catch(err => {
+      // Prefetch é best-effort: não deve bloquear login.
+      window._ntRhCsvPrefetchedText = null;
+      return null;
+    });
+  return window._ntRhCsvPrefetchPromise;
+}
+
 // ─── STORAGE HELPERS ────────────────────────
 function loadData(key, fallback) { return fallback; }
 function saveData(key, value) {}
+
+// ═══════════════════════════════════════════
+//  AUTH GUARD (Firebase) — Fonte única da verdade
+//  - Apenas Firebase decide se está logado.
+//  - Se user existir: garante dados mínimos em sessionStorage (cp_user).
+//  - Se user for null: limpa storages e expulsa imediatamente.
+//  - Token refresh/expiração: onIdTokenChanged expulsa "na hora".
+// ═══════════════════════════════════════════
+function _authHideBody() {
+  // Evita "piscar" de UI antes do Firebase resolver o estado.
+  // Mantém overlays (loading/progress/erro) visíveis via CSS.
+  try { document.body.style.visibility = 'hidden'; } catch (_) {}
+}
+function _authShowBody() {
+  try { document.body.style.visibility = 'visible'; } catch (_) {}
+}
+function _authIsLoginPage() {
+  try {
+    const p = (window.location && window.location.pathname) ? String(window.location.pathname).toLowerCase() : '';
+    return p.endsWith('/login.html') || p.endsWith('\\login.html') || p.endsWith('login.html');
+  } catch (_) {
+    return false;
+  }
+}
+function _authHardKickToLogin() {
+  try {
+    localStorage.clear();
+    sessionStorage.clear();
+  } catch (_) {}
+  // Redirect não deve acontecer "cedo demais" (antes do Firebase resolver).
+  // Deixa o onAuthStateChanged decidir quando redirecionar.
+  window.__ntShouldRedirectToLogin = true;
+}
+
+function _readCpUser() {
+  try {
+    const raw = sessionStorage.getItem('cp_user');
+    if (!raw) return null;
+    const o = JSON.parse(raw);
+    return (o && typeof o === 'object') ? o : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function _hasBasicSessionUser(u) {
+  if (!u || typeof u !== 'object') return false;
+  const role = String(u.role || '').trim();
+  const name = String(u.name || '').trim();
+  const loginEmail = String(u.loginEmail || u.email || '').trim();
+  if (!role || !name || !loginEmail) return false;
+  if (role === 'supervisor' && !String(u.leaderKey || u.email || '').trim()) return false;
+  return true;
+}
+
+function _ntIsFirestorePermissionDenied(err) {
+  const code = String(err?.code || err?.name || '').toLowerCase();
+  const msg = String(err?.message || '').toLowerCase();
+  return code.includes('permission-denied') || msg.includes('permission denied');
+}
+
+async function _ensureBasicUserInSession(firebaseUser) {
+  const email = String(firebaseUser?.email || '').trim().toLowerCase();
+  if (!email) return null;
+
+  // 1) Se já existe sessão consistente, usa ela
+  const fromSession = _readCpUser();
+  if (_hasBasicSessionUser(fromSession)) return fromSession;
+
+  // 2) Busca no Firestore (users/leaders)
+  const fetchFn = window._ntFetchProfileByEmail;
+  const profile = (typeof fetchFn === 'function') ? await fetchFn(email) : null;
+  if (!profile) {
+    const err = new Error('NT_PROFILE_NOT_CONFIGURED');
+    err.code = 'NT_PROFILE_NOT_CONFIGURED';
+    err.email = email;
+    throw err;
+  }
+
+  // Normaliza para o formato usado pelo app
+  const role = String(profile.role || profile.papel || '').trim() || 'supervisor';
+  const name = String(profile.name || profile.nome || '').trim() || email;
+
+  // Supervisor: mantém compat com filtros existentes (email = leaderKey)
+  const rawLeaderKey = String(profile.leaderKey || profile.teamKey || profile.teamId || profile.liderKey || profile.lider || '').trim();
+  const leaderKey = (typeof window._ntNormalizeTeamId === 'function')
+    ? window._ntNormalizeTeamId(rawLeaderKey)
+    : rawLeaderKey;
+  const userObj = (role === 'supervisor')
+    ? {
+        email:      leaderKey || email, // compat: filtros antigos usam currentUser.email como chave de equipe
+        loginEmail: email,
+        name,
+        role: 'supervisor',
+        leaderKey: leaderKey || undefined
+      }
+    : {
+        email,
+        loginEmail: email,
+        name,
+        role
+      };
+
+  try {
+    sessionStorage.setItem('cp_user', JSON.stringify(userObj));
+  } catch (_) {}
+  _persistSessionExtras(userObj);
+  return userObj;
+}
+
+function _initFirebaseAuthGuard() {
+  _authHideBody();
+  _ntSetAuthTransition(true);
+
+  const auth = window._fbAuth;
+  const onAuth = window._fbOnAuthStateChanged;
+  const onToken = window._fbOnIdTokenChanged;
+  const isLogin = _authIsLoginPage();
+  let authResolvedOnce = false;
+
+  if (!auth || typeof onAuth !== 'function') {
+    // Sem Firebase Auth carregado → não redireciona à força; evita "piscar".
+    _ntSetAuthTransition(false);
+    _authShowBody();
+    alert('Erro: Firebase Auth não carregou. Recarregue a página.');
+    return;
+  }
+
+  // Token refresh/expiração: expulsa imediatamente quando virar null
+  if (typeof onToken === 'function') {
+    onToken(auth, (user) => {
+      console.log('ESTADO AUTH MUDOU:', user ? 'LOGADO: ' + user.uid : 'DESLOGADO');
+      if (!user && !isLogin) _authHardKickToLogin();
+    }, () => {
+      if (!isLogin) _authHardKickToLogin();
+    });
+  }
+
+  onAuth(auth, async (user) => {
+    console.log('ESTADO AUTH MUDOU:', user ? 'LOGADO: ' + user.uid : 'DESLOGADO');
+    authResolvedOnce = true;
+    if (!user) {
+      if (!isLogin) {
+        _authHardKickToLogin();
+        if (window.__ntShouldRedirectToLogin) window.location.replace('login.html');
+      }
+      _ntSetAuthTransition(false);
+      _authShowBody();
+      return;
+    }
+
+    try {
+      // Força validação em background / sincroniza token (sem travar UI)
+      user.getIdToken?.().catch(() => {});
+    } catch (_) {}
+
+    // Pre-fetch: RH CSV em paralelo ao fetch do perfil (best-effort)
+    _ntStartPrefetchRhCsv();
+
+    let appUser = null;
+    try {
+      appUser = await _ensureBasicUserInSession(user);
+    } catch (e) {
+      // Caso específico: usuário autenticado, mas perfil não configurado
+      if (e && (e.code === 'NT_PROFILE_NOT_CONFIGURED' || String(e.message || '') === 'NT_PROFILE_NOT_CONFIGURED')) {
+        _ntSetAuthTransition(false);
+        _authShowBody();
+        _ntShowProfileNotConfiguredScreen();
+        return;
+      }
+      if (user && _ntIsFirestorePermissionDenied(e)) {
+        _ntSetAuthTransition(false);
+        _authShowBody();
+        alert(`Erro de Permissão: Seu UID ${user.uid} não foi encontrado na coleção /users`);
+        return;
+      }
+      _authHardKickToLogin();
+      if (!isLogin && window.__ntShouldRedirectToLogin) window.location.replace('login.html');
+      return;
+    }
+
+    currentUser = appUser;
+
+    // Se estiver no login.html (mesmo script), manda para o app.
+    const onAppOnly = document.getElementById('app') && !document.getElementById('page-login');
+    if (!onAppOnly) {
+      window.location.replace('app.html');
+      return;
+    }
+
+    // Libera a UI só no final (auth + dados básicos ok)
+    _authShowBody();
+    _ntSetAuthTransition(false);
+
+    // App: inicia
+    startApp();
+  }, () => {
+    if (!isLogin) _authHardKickToLogin();
+    _ntSetAuthTransition(false);
+    _authShowBody();
+  });
+}
 
 // ─── Persistência explícita de sessão (login → app em páginas separadas) ─
 function _persistSessionExtras(user) {
@@ -75,63 +534,8 @@ function _clearSessionExtras() {
 
 // ─── INIT ────────────────────────────────────
 window.bootApp = function() {
-  const saved = sessionStorage.getItem('cp_user');
-  if (!saved) return;
-
-  let user;
-  try { user = JSON.parse(saved); } catch (_) { user = null; }
-  if (!user || typeof user !== 'object') {
-    sessionStorage.removeItem('cp_user');
-    _clearSessionExtras();
-    return;
-  }
-
-  // Migra e-mails legados (renato/heleno/toni/helcio/andre/carlos@lumini → versão oficial).
-  const leg = window.LUMINI_LEGACY_EMAIL_MAP || {};
-  const lkey = String(user.loginEmail || user.email || '').toLowerCase();
-  if (leg[lkey]) {
-    const fromDemo = (typeof DEMO_USERS !== 'undefined' && Array.isArray(DEMO_USERS))
-      ? DEMO_USERS.find(u => u.email === leg[lkey])
-      : null;
-    user = fromDemo
-      ? { ...fromDemo, loginEmail: fromDemo.email }
-      : { ...user, email: leg[lkey], loginEmail: leg[lkey] };
-  }
-
-  // Migração: sessões antigas de supervisor traziam `email = sup1@lumini`.
-  // Re-resolve via auth-config para obter o teamKey atual (ex.: "DANIEL").
-  const cfg = window.LUMINI_AUTH_CONFIG;
-  if (cfg && typeof cfg.resolveAuthForEmail === 'function') {
-    const probeEmail = String(user.loginEmail || user.email || '').toLowerCase();
-    const auth = cfg.resolveAuthForEmail(probeEmail);
-    if (auth && auth.role === 'supervisor') {
-      user = {
-        email:      auth.leaderKey,
-        loginEmail: probeEmail,
-        name:       auth.name,
-        role:       'supervisor',
-        leaderKey:  auth.leaderKey
-      };
-    } else if (auth) {
-      user = {
-        email:      probeEmail,
-        loginEmail: probeEmail,
-        name:       user.name || auth.name,
-        role:       auth.role
-      };
-    }
-  }
-
-  sessionStorage.setItem('cp_user', JSON.stringify(user));
-  _persistSessionExtras(user);
-  currentUser = user;
-
-  const appRoot = document.getElementById('app');
-  if (!appRoot) {
-    window.location.href = 'app.html';
-    return;
-  }
-  startApp();
+  // Agora o guard do Firebase é o único árbitro.
+  _initFirebaseAuthGuard();
 };
 
 window.refreshCurrentPage = function() {
@@ -164,7 +568,7 @@ window.refreshCurrentPage = function() {
 // equipe normalizada — ex.: "DANIEL") por compatibilidade com filtros
 // existentes (`e.supervisor === currentUser.email`). O e-mail real digitado
 // fica em `currentUser.loginEmail`.
-function doLogin() {
+async function doLogin() {
   const emailRaw = document.getElementById('login-email').value.trim();
   const pass     = document.getElementById('login-password')?.value?.trim?.() || '';
   const errEl    = document.getElementById('login-error');
@@ -228,16 +632,57 @@ function doLogin() {
         role:       auth.role
       };
 
-  currentUser = user;
-  sessionStorage.setItem('cp_user', JSON.stringify(user));
-  _persistSessionExtras(user);
-
-  const appRoot = document.getElementById('app');
-  if (!appRoot) {
-    window.location.href = 'app.html';
+  // Firebase Auth (fonte de verdade) — efetua login e deixa o guard assumir
+  const signIn = window._fbSignInWithEmailAndPassword;
+  const fbAuth = window._fbAuth;
+  if (!fbAuth || typeof signIn !== 'function') {
+    showError('Erro de conexão com autenticação. Recarregue a página.');
     return;
   }
-  startApp();
+
+  // Mostra a transição de autenticação (barra de progresso no topo)
+  window._ntSetAuthTransition?.(true);
+  try {
+    await signIn(fbAuth, email, pass);
+    currentUser = user;
+    sessionStorage.setItem('cp_user', JSON.stringify(user));
+    _persistSessionExtras(user);
+    window.location.replace('app.html');
+  } catch (error) {
+    console.error('ERRO NO MOMENTO DO LOGIN:', error?.code || error, error?.message || '');
+    console.error('[Auth] login falhou (raw):', error);
+    const code = String(error?.code || '').toLowerCase();
+    if (code === 'auth/api-key-not-valid') {
+      // Imprime contexto pra correlacionar com Firebase Console / Google Cloud Console.
+      // Se o erro for restrição de origem ou domínio não autorizado, esses valores
+      // são exatamente o que precisamos colar nas listas de autorização.
+      try {
+        const cfg = window.firebaseConfig || {};
+        const apiKey = String(cfg.apiKey || '');
+        console.warn('[Auth] api-key-not-valid — contexto pra debug de infra:', {
+          origin:        location.origin,
+          href:          location.href,
+          protocol:      location.protocol,
+          projectId:     cfg.projectId,
+          authDomain:    cfg.authDomain,
+          apiKeyPrefix:  apiKey.slice(0, 6),
+          apiKeySuffix:  apiKey.slice(-4),
+          apiKeyLen:     apiKey.length
+        });
+        if (location.protocol === 'file:') {
+          console.warn('[Auth] Página servida via file:// — Firebase Auth não funciona nesse protocolo. ' +
+                       'Use um servidor local (ex.: http://localhost:5500).');
+        }
+      } catch (_) { /* diagnóstico best-effort */ }
+      showError('Erro de configuração do Firebase (API key inválida/restrita). Verifique a chave e o domínio autorizado.');
+    } else if (code === 'auth/network-request-failed') {
+      showError('Falha de rede ao conectar no Firebase. Verifique sua internet e tente novamente.');
+    } else {
+      showError('E-mail ou senha incorretos.');
+    }
+  } finally {
+    window._ntSetAuthTransition?.(false);
+  }
 }
 
 function startApp() {
@@ -360,17 +805,26 @@ function applyUserTheme() {
 }
 
 function doLogout() {
-  sessionStorage.removeItem('cp_user');
-  _clearSessionExtras();
-  document.body.classList.remove('theme-sup1','theme-sup2','theme-admin','theme-andre','theme-carlos','theme-rh');
-  if (_notifCheckInterval) { clearInterval(_notifCheckInterval); _notifCheckInterval = null; }
-  if (window._ntUnsubscribeInAppNotifications) window._ntUnsubscribeInAppNotifications();
-  currentUser = null;
-  const onAppOnly = document.getElementById('app') && !document.getElementById('page-login');
-  if (onAppOnly) {
-    window.location.href = 'login.html';
+  const finalize = () => {
+    try { sessionStorage.removeItem('cp_user'); } catch (_) {}
+    _clearSessionExtras();
+    document.body.classList.remove('theme-sup1','theme-sup2','theme-admin','theme-andre','theme-carlos','theme-rh');
+    if (_notifCheckInterval) { clearInterval(_notifCheckInterval); _notifCheckInterval = null; }
+    if (window._ntUnsubscribeInAppNotifications) window._ntUnsubscribeInAppNotifications();
+    currentUser = null;
+    _authHardKickToLogin();
+  };
+
+  // Firebase Auth é a fonte de verdade: sair precisa dar signOut.
+  const auth = window._fbAuth;
+  const signOut = window._fbSignOut;
+  if (auth && typeof signOut === 'function') {
+    Promise.resolve()
+      .then(() => signOut(auth))
+      .catch(() => {})
+      .finally(finalize);
   } else {
-    location.reload();
+    finalize();
   }
 }
 
@@ -384,7 +838,10 @@ function togglePass() {
 }
 
 // ─── NAVIGATION ──────────────────────────────
-function navigateTo(page) {
+async function navigateTo(page) {
+  // Libera memória (Chart.js / handlers) antes de re-renderizar outra tela
+  try { window._ntDestroyCharts && window._ntDestroyCharts(); } catch (_) {}
+
   document.querySelectorAll('.page-section').forEach(s => s.classList.add('hidden'));
   document.querySelectorAll('.nav-item').forEach(n => n.classList.remove('active'));
 
@@ -440,7 +897,16 @@ function navigateTo(page) {
     // Comunicados
     'comms':             () => { if (window._commsRenderPage) window._commsRenderPage(); },
   };
-  if (renders[page]) renders[page]();
+  // Skeleton: mostra durante o render (sync/async)
+  _ntSetPageSkeleton(page, true);
+  try {
+    if (renders[page]) {
+      const out = renders[page]();
+      if (out && typeof out.then === 'function') await out;
+    }
+  } finally {
+    _ntSetPageSkeleton(page, false);
+  }
 }
 
 function goBack() {
@@ -3577,8 +4043,9 @@ function _updateBreadcrumb(page) {
 (function _patchNavigateTo() {
   const _origNavigate = navigateTo;
   window.navigateTo = function(page) {
-    _origNavigate(page);
-    _updateBreadcrumb(page);
+    Promise.resolve(_origNavigate(page))
+      .catch(() => {})
+      .finally(() => _updateBreadcrumb(page));
   };
 })();
 

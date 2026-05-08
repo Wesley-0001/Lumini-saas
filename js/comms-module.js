@@ -37,6 +37,8 @@
     lastUserSearchResults: [],
   };
 
+  const _dlog = (...args) => (window.luminiLog || console.log)(...args);
+
   function _toast(msg, type = 'success') {
     if (window._ntShowToast) window._ntShowToast(msg, type);
   }
@@ -137,7 +139,7 @@
       : [];
 
     if (!fromCloud.length) {
-      console.log('[Comms DEBUG] _loadAll: fonte=localStorage apenas, count=', fromLocal.length);
+      _dlog('[Comms DEBUG] _loadAll: fonte=localStorage apenas, count=', fromLocal.length);
       return fromLocal;
     }
 
@@ -151,7 +153,7 @@
       if (!ex) byId.set(c.id, c);
       else byId.set(c.id, _mergeCommRecords(ex, c));
     }
-    console.log('[Comms DEBUG] _loadAll: local=', fromLocal.length, 'cloud=', fromCloud.length, 'merged unique=', byId.size);
+    _dlog('[Comms DEBUG] _loadAll: local=', fromLocal.length, 'cloud=', fromCloud.length, 'merged unique=', byId.size);
     return Array.from(byId.values());
   }
 
@@ -319,7 +321,7 @@
         return hay.includes(q);
       });
       if (out.length !== beforeSearch) {
-        console.log('[Comms DEBUG] filtro busca: antes=', beforeSearch, 'depois=', out.length, 'termo=', q);
+        _dlog('[Comms DEBUG] filtro busca: antes=', beforeSearch, 'depois=', out.length, 'termo=', q);
       }
     }
 
@@ -333,7 +335,7 @@
       out = out.filter(c => (c.authorEmail || '') === (me || ''));
     }
     if (state.filter !== 'all' && out.length !== afterSearch) {
-      console.log('[Comms DEBUG] filtro chip: modo=', state.filter, 'antes=', afterSearch, 'depois=', out.length);
+      _dlog('[Comms DEBUG] filtro chip: modo=', state.filter, 'antes=', afterSearch, 'depois=', out.length);
     }
     return out;
   }
@@ -342,7 +344,7 @@
     const all = _loadAll();
     const visible = _isAdminView() ? all : all.filter(_isVisibleToCurrentUser);
     if (!_isAdminView() && visible.length !== all.length) {
-      console.log('[Comms DEBUG] visibilidade (não-admin): total carregado=', all.length, 'visível ao usuário=', visible.length);
+      _dlog('[Comms DEBUG] visibilidade (não-admin): total carregado=', all.length, 'visível ao usuário=', visible.length);
     }
     return _sort(visible);
   }
@@ -392,7 +394,7 @@
 
     const visible = _visibleList();
     const filtered = _applyFilters(visible);
-    console.log('[Comms DEBUG] render lista: visíveis=', visible.length, 'após filtros=', filtered.length, 'chip=', state.filter);
+    _dlog('[Comms DEBUG] render lista: visíveis=', visible.length, 'após filtros=', filtered.length, 'chip=', state.filter);
 
     if (!filtered.length) {
       listEl.innerHTML = `
@@ -553,7 +555,7 @@
           <div class="search-bar" style="margin:0">
             <i class="fas fa-search"></i>
             <input type="text" id="comms-user-search" placeholder="Buscar por nome ou e-mail..."
-              oninput="window._commsSearchUsers && window._commsSearchUsers(this.value)">
+              oninput="window._commsSearchUsersDebounced && window._commsSearchUsersDebounced(this.value)">
           </div>
 
           <div id="comms-user-results" class="comms-user-results"></div>
@@ -769,7 +771,7 @@
     const all = _loadAll();
     all.push(item);
     _saveAll(all);
-    console.log('[Comms DEBUG] envio: salvo em localStorage (', STORAGE_KEY, ') + notificações via _ntNotifyCommsPublished → in_app_notifications');
+    _dlog('[Comms DEBUG] envio: salvo em localStorage (', STORAGE_KEY, ') + notificações via _ntNotifyCommsPublished → in_app_notifications');
     if (window._ntPersistInternalComm) {
       window._ntPersistInternalComm(item);
     }
@@ -842,6 +844,11 @@
     _renderList();
   }
 
+  // Debounce (300ms) para evitar re-render a cada tecla
+  const _renderAllDebounced = (window._ntDebounce)
+    ? window._ntDebounce(_renderAll, 300)
+    : _renderAll;
+
   // ─── API pública (mantém arquitetura atual) ───
   window._commsSetFilter = function(filter) {
     state.filter = filter || 'all';
@@ -874,6 +881,11 @@
     _renderUserResults(q);
   };
 
+  // Wrapper debounced (usado pelo input de busca de usuários no modal)
+  window._commsSearchUsersDebounced = (window._ntDebounce)
+    ? window._ntDebounce((q) => _renderUserResults(q), 300)
+    : ((q) => _renderUserResults(q));
+
   window._commsToggleRole = function(role, checked) {
     const r = String(role || '').trim();
     if (!r) return;
@@ -896,6 +908,10 @@
     _renderAll();
   };
 
+  window._commsRenderDebounced = function() {
+    _renderAllDebounced();
+  };
+
   window._commsRenderPage = function() {
     const btnNew = document.getElementById('comms-btn-new');
     if (btnNew) btnNew.style.display = _canCreate() ? '' : 'none';
@@ -903,6 +919,6 @@
     _renderAll();
   };
 
-  console.log('✅ Comunicação Interna carregada.');
+  _dlog('✅ Comunicação Interna carregada.');
 })();
 

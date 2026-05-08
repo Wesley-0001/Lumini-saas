@@ -844,7 +844,7 @@ function renderRHEmployeesTable(targetIdParam) {
     <div class="rh-filter-bar">
       <div class="search-bar" style="flex:2;min-width:200px">
         <i class="fas fa-search"></i>
-        <input type="text" id="${_epfx}rh-search" placeholder="Buscar por nome, matrícula, cargo, setor..." oninput="rhApplyFilter('${_epfx}')" value="${_rhEmpFilter.search}" />
+        <input type="text" id="${_epfx}rh-search" placeholder="Buscar por nome, matrícula, cargo, setor..." oninput="rhApplyFilterDebounced('${_epfx}')" value="${_rhEmpFilter.search}" />
       </div>
       <select id="${_epfx}rh-fil-situacao" class="rh-select" onchange="rhApplyFilter('${_epfx}')">
         <option value="TODOS" ${_rhEmpFilter.situacao==='TODOS'?'selected':''}>Todos</option>
@@ -903,6 +903,19 @@ window.rhApplyFilter = function(pfx) {
   _rhEmpFilter._pfx = p;
   _rhEmpPage = 1;
   rhRenderTableBody(p);
+};
+
+// Debounce (300ms) para evitar filtrar a cada tecla digitada
+const _rhApplyFilterDebouncers = {};
+window.rhApplyFilterDebounced = function(pfx) {
+  const key = pfx || '';
+  if (!_rhApplyFilterDebouncers[key]) {
+    const deb = (window._ntDebounce)
+      ? window._ntDebounce(() => window.rhApplyFilter(key), 300)
+      : (() => window.rhApplyFilter(key));
+    _rhApplyFilterDebouncers[key] = deb;
+  }
+  _rhApplyFilterDebouncers[key]();
 };
 
 function rhRenderTableBody(pfx) {

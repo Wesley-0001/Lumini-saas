@@ -8,21 +8,119 @@
 
 // ─── SDK Firebase via CDN ───────────────────
 import { initializeApp }       from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, collection, doc, getDocs, getDoc, setDoc, deleteDoc, writeBatch, onSnapshot, query, where, updateDoc, addDoc, Timestamp }
+import { getFirestore, enableIndexedDbPersistence, collection, doc, getDocs, getDoc, setDoc, deleteDoc, writeBatch, onSnapshot, query, where, updateDoc, addDoc, Timestamp }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
+import {
+  getAuth,
+  setPersistence,
+  browserLocalPersistence,
+  onAuthStateChanged,
+  onIdTokenChanged,
+  signInWithEmailAndPassword,
+  signOut
+} from "https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js";
 
 // ─── Configuração do projeto — New Time ─────
-const firebaseConfig = {
-  apiKey:            "AIzaSyAVB6QZCUE4fUyrFMh7Oex0rcNRLVP9uI",
-  authDomain:        "lumini-sabor-nt.firebaseapp.com",
-  projectId:         "lumini-sabor-nt",
-  storageBucket:     "lumini-sabor-nt.firebasestorage.app",
-  messagingSenderId: "622572697165",
-  appId:             "1:622572697165:web:8b2d201870b39dc88b0e04"
-};
+// Fonte única de verdade: js/firebase-config.js (script clássico) define
+// `window.firebaseConfig` ANTES deste módulo rodar. Ler de lá garante que
+// o config seja idêntico em todas as páginas e em qualquer script consumidor.
+const firebaseConfig = window.firebaseConfig;
+
+if (!firebaseConfig || !firebaseConfig.apiKey) {
+  const msg = '[Firebase] window.firebaseConfig não encontrada. ' +
+              'Verifique se js/firebase-config.js é carregado ANTES de js/firebase-db.js.';
+  console.error(msg);
+  throw new Error(msg);
+}
+
+// Diagnóstico rápido para erros `auth/api-key-not-valid` (restrição/rotacionamento da chave)
+try {
+  const origin = (globalThis?.location?.origin) || '(sem origin)';
+  const rawKey = String(firebaseConfig.apiKey ?? '');
+  const trimmed = rawKey.trim();
+  const looksLikeKey = /^AIza[0-9A-Za-z\-_]{10,}$/.test(trimmed);
+  if (rawKey !== trimmed || !looksLikeKey) {
+    console.warn('[Firebase] apiKey suspeita:', {
+      origin,
+      len: rawKey.length,
+      trimmedLen: trimmed.length,
+      startsWith: rawKey.slice(0, 6)
+    });
+  } else {
+    console.log('[Firebase] Config OK (apiKey):', {
+      origin,
+      len: trimmed.length,
+      startsWith: trimmed.slice(0, 6),
+      endsWith: trimmed.slice(-4)
+    });
+  }
+} catch (e) {
+  console.warn('[Firebase] Falha no diagnóstico da apiKey:', e);
+}
 
 const firebaseApp = initializeApp(firebaseConfig);
 const db          = getFirestore(firebaseApp);
+const auth        = getAuth(firebaseApp);
+
+// ─── Persistência do Auth (IMPORTANTE) ─────────
+// Garante que o login sobreviva ao refresh e evita "sessão fantasma" por SESSION/NONE.
+setPersistence(auth, browserLocalPersistence)
+  .then(() => console.log('[Auth] Persistência: LOCAL'))
+  .catch((err) => console.warn('[Auth] Falha ao setar persistência LOCAL:', err?.code || err, err?.message || ''));
+
+// ─── Firebase Auth (exposto para app.js) ──────
+window._fbAuth = auth;
+window._fbOnAuthStateChanged = onAuthStateChanged;
+window._fbOnIdTokenChanged = onIdTokenChanged;
+window._fbSignInWithEmailAndPassword = signInWithEmailAndPassword;
+window._fbSignOut = signOut;
+
+/**
+ * Busca o perfil do usuário no Firestore, priorizando `users` e fallback em `leaders`.
+ * Esperado para preencher o `sessionStorage.cp_user` quando faltar o básico.
+ *
+ * @param {string} email
+ * @returns {Promise<object|null>}
+ */
+window._ntFetchProfileByEmail = async function(email) {
+  const em = String(email || '').trim().toLowerCase();
+  if (!em) return null;
+
+  // 0) Prioriza busca por UID (compatível com Security Rules: auth.uid == docId)
+  try {
+    const uid = String(auth?.currentUser?.uid || '').trim();
+    if (uid) {
+      const ref = doc(db, 'users', uid);
+      const snap = await getDoc(ref);
+      console.log('BUSCA POR UID:', snap.exists());
+      if (snap.exists()) return { ...snap.data(), id: snap.id };
+    }
+  } catch (e) {
+    // Se der permission-denied aqui, propaga (é o caminho "permitido" pelas rules).
+    console.warn('[Lumini] Falha ao buscar perfil por UID no Firestore:', e);
+    const code = String(e?.code || e?.name || '').toLowerCase();
+    const msg = String(e?.message || '').toLowerCase();
+    if (code.includes('permission-denied') || msg.includes('permission denied')) throw e;
+  }
+
+  const tryCol = async (colName) => {
+    const q = query(collection(db, colName), where('email', '==', em));
+    const snap = await getDocs(q);
+    if (snap.empty) return null;
+    const d = snap.docs[0];
+    return { ...d.data(), id: d.id };
+  };
+
+  try {
+    return (await tryCol('users')) || (await tryCol('leaders'));
+  } catch (e) {
+    console.warn('[Lumini] Falha ao buscar perfil no Firestore:', e);
+    const code = String(e?.code || e?.name || '').toLowerCase();
+    const msg = String(e?.message || '').toLowerCase();
+    if (code.includes('permission-denied') || msg.includes('permission denied')) throw e;
+    return null;
+  }
+};
 
 /** Histórico de comunicados (Comunicação Interna); notificações do sino permanecem em in_app_notifications. */
 const INTERNAL_COMMS_COL = 'internal_comms';
@@ -50,13 +148,19 @@ let _ntInAppUnsub = null;
 const _LUMINI_CSV_DEFAULT = 'Rh.Lumini.csv';
 const _LUMINI_XLSX_DEFAULT = 'Rh.Lumini.xlsx';
 
+// Cache (singleton) do processamento do CSV por refresh.
+// Garante que o CSV bruto NÃO seja re-processado a cada chamada.
+let _luminiCsvEmployeesCache = {
+  loaded: false,
+  promise: null,
+  employees: null,
+  sourceUrl: null
+};
+
 /** Chave estável para filtro de equipe (coluna LÍDER): sem acentos, maiúsculas. */
 function _normalizeLiderKey(s) {
-  return String(s == null ? '' : s)
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .trim()
-    .toUpperCase();
+  // Mantém compat com uso legado, mas padroniza em SNAKE_CASE.
+  return (typeof _ntNormalizeTeamId === 'function') ? _ntNormalizeTeamId(s) : String(s == null ? '' : s).trim();
 }
 window._ntNormalizeLiderKey = _normalizeLiderKey;
 
@@ -220,20 +324,42 @@ function _luminiFieldsFromCsvRow(row) {
 
 async function fetchEmployeesFromLuminiCsv() {
   const url = String(window.LUMINI_EMPLOYEES_CSV_URL || _LUMINI_CSV_DEFAULT).trim();
-  const res = await fetch(url, { method: 'GET', cache: 'no-store' });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const text = await res.text();
-  const rawRows = parseRhLuminiCsvToRows(text);
-  const employees = [];
-  rawRows.forEach((raw, i) => {
-    const f = _luminiFieldsFromCsvRow(raw);
-    const mat = f.mat ? String(f.mat).replace(/\s+/g, '').trim() : '';
-    const nome = (f.nome || '').trim();
-    if (!mat || !nome) return;
-    employees.push(_luminiFieldsToEmployee(f, i));
+  if (_luminiCsvEmployeesCache.loaded && Array.isArray(_luminiCsvEmployeesCache.employees)) {
+    return _luminiCsvEmployeesCache.employees;
+  }
+  if (_luminiCsvEmployeesCache.promise) return await _luminiCsvEmployeesCache.promise;
+
+  _luminiCsvEmployeesCache.sourceUrl = url;
+  _luminiCsvEmployeesCache.promise = (async () => {
+    // Reaproveita prefetch disparado no login (js/app.js) quando disponível.
+    const prefetched = (typeof window !== 'undefined') ? window._ntRhCsvPrefetchedText : null;
+    const text = (typeof prefetched === 'string' && prefetched.trim())
+      ? prefetched
+      : await (async () => {
+          const res = await fetch(url, { method: 'GET', cache: 'no-store' });
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return await res.text();
+        })();
+
+    const rawRows = parseRhLuminiCsvToRows(text);
+    const employees = [];
+    rawRows.forEach((raw, i) => {
+      const f = _luminiFieldsFromCsvRow(raw);
+      const mat = f.mat ? String(f.mat).replace(/\s+/g, '').trim() : '';
+      const nome = (f.nome || '').trim();
+      if (!mat || !nome) return;
+      employees.push(_luminiFieldsToEmployee(f, i));
+    });
+    if (!employees.length) throw new Error('CSV sem colaboradores válidos (MATRÍCULA + COLABORADOR)');
+
+    _luminiCsvEmployeesCache.employees = employees;
+    _luminiCsvEmployeesCache.loaded = true;
+    return employees;
+  })().finally(() => {
+    _luminiCsvEmployeesCache.promise = null;
   });
-  if (!employees.length) throw new Error('CSV sem colaboradores válidos (MATRÍCULA + COLABORADOR)');
-  return employees;
+
+  return await _luminiCsvEmployeesCache.promise;
 }
 
 async function fetchEmployeesFromLuminiXlsx() {
@@ -254,21 +380,21 @@ async function fetchEmployeesFromLuminiXlsx() {
 async function loadEmployeesWithSheetFallback() {
   try {
     const data = await fetchEmployeesFromLuminiCsv();
-    console.log('[RH CSV] employees carregados:', data.length);
+    (window.luminiLog || console.log)('[RH CSV] employees carregados:', data.length);
     window._employeesFromSheet = true;
     window._employeesSheetSource = 'csv';
     return data;
   } catch (eCsv) {
-    console.warn('[RH CSV] falha:', eCsv && eCsv.message ? eCsv.message : eCsv);
+    (window.luminiWarn || console.warn)('[RH CSV] falha:', eCsv && eCsv.message ? eCsv.message : eCsv);
   }
   try {
     const data = await fetchEmployeesFromLuminiXlsx();
-    console.log('[PLANILHA XLSX] employees carregados:', data.length);
+    (window.luminiLog || console.log)('[PLANILHA XLSX] employees carregados:', data.length);
     window._employeesFromSheet = true;
     window._employeesSheetSource = 'xlsx';
     return data;
   } catch (e) {
-    console.warn('[PLANILHA] falha, usando Firestore:', e && e.message ? e.message : e);
+    (window.luminiWarn || console.warn)('[PLANILHA] falha, usando Firestore:', e && e.message ? e.message : e);
     window._employeesFromSheet = false;
     window._employeesSheetSource = 'firestore';
     return loadCollection('employees');
@@ -277,9 +403,9 @@ async function loadEmployeesWithSheetFallback() {
 
 // ─── Carrega coleção do Firestore ────────────
 async function loadCollection(name) {
-  console.log('[BOOT] antes getDocs coleção:', name, '(Promise.all)');
+  (window.luminiLog || console.log)('[BOOT] antes getDocs coleção:', name, '(Promise.all)');
   const snap = await getDocs(collection(db, name));
-  console.log('[BOOT] ok getDocs coleção:', name, '(Promise.all)', `(${snap.size} docs)`);
+  (window.luminiLog || console.log)('[BOOT] ok getDocs coleção:', name, '(Promise.all)', `(${snap.size} docs)`);
   return snap.docs.map(d => ({ ...d.data(), id: d.id }));
 }
 
@@ -395,6 +521,19 @@ window.resetFirebaseData = async function() {
 window.initFirebase = async function() {
   try {
     showLoadingScreen(true);
+
+    try {
+      await enableIndexedDbPersistence(db);
+    } catch (err) {
+      const code = err && err.code;
+      if (code === 'failed-precondition') {
+        console.warn('[Firestore] Persistência offline: outra aba já usa IndexedDB; use uma única aba para cache completo.');
+      } else if (code === 'unimplemented') {
+        console.warn('[Firestore] Persistência IndexedDB não disponível neste ambiente.');
+      } else {
+        console.warn('[Firestore] Não foi possível ativar persistência offline:', err && err.message ? err.message : err);
+      }
+    }
 
     await seedIfNeeded();
 
@@ -545,7 +684,7 @@ function listenRealtime() {
   onSnapshot(collection(db, INTERNAL_COMMS_COL), snap => {
     if (!window._dbReady) return;
     window._cache.internalComms = snap.docs.map(d => ({ ...d.data(), id: d.id }));
-    console.log('[Comms DEBUG] snapshot internal_comms:', window._cache.internalComms.length, 'docs');
+    (window.luminiLog || console.log)('[Comms DEBUG] snapshot internal_comms:', window._cache.internalComms.length, 'docs');
     if (window.currentPage === 'comms' && window._commsRender) window._commsRender();
   }, err => console.warn('[internal_comms]', err && err.message ? err.message : err));
 }
@@ -685,7 +824,7 @@ window._ntPersistInternalComm = async function(item) {
   try {
     const clean = JSON.parse(JSON.stringify(item));
     await setDoc(doc(db, INTERNAL_COMMS_COL, String(item.id)), clean, { merge: true });
-    console.log('[Comms DEBUG] persist internal_comms docId=', item.id);
+    (window.luminiLog || console.log)('[Comms DEBUG] persist internal_comms docId=', item.id);
   } catch (e) {
     console.warn('[internal_comms] persist:', e && e.message ? e.message : e);
   }
@@ -789,8 +928,30 @@ window._ntPublishEmployeeEvent = async function(opts) {
 
 /** Frequência diária por equipe (supervisor) — coleção `daily_attendance`. */
 const DAILY_ATTENDANCE_COL = 'daily_attendance';
-/** Coleção legada (algumas bases salvaram como `frequencias`). */
-const FREQUENCIAS_COL = 'frequencias';
+
+function _ntNormalizeTeamId(v) {
+  const s = String(v == null ? '' : v).trim();
+  if (!s) return '';
+  try {
+    return s
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase()
+      .replace(/[\s\-]+/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .replace(/[^A-Z0-9_]/g, '');
+  } catch (_) {
+    // Fallback (older engines): best-effort without normalize()
+    return s
+      .toUpperCase()
+      .replace(/[\s\-]+/g, '_')
+      .replace(/_+/g, '_')
+      .replace(/^_+|_+$/g, '')
+      .replace(/[^A-Z0-9_]/g, '');
+  }
+}
+window._ntNormalizeTeamId = _ntNormalizeTeamId;
 
 function _ntNormAttendanceStatus(st) {
   const s = String(st == null ? '' : st).trim().toLowerCase();
@@ -803,27 +964,8 @@ function _ntNormAttendanceStatus(st) {
   return s || 'pending';
 }
 
-function _ntTryDateField(obj, candidates) {
-  for (const k of (Array.isArray(candidates) ? candidates : [])) {
-    if (obj && obj[k] != null && obj[k] !== '') return obj[k];
-  }
-  return null;
-}
-
-function _ntCoerceAnyDateToISO(v) {
-  // v pode ser string 'YYYY-MM-DD', 'DD/MM/YYYY', Date, Timestamp (firestore)
-  if (v == null || v === '') return '';
-  if (typeof v === 'string') return _luminiFmtDate(v);
-  if (v instanceof Date) return _luminiFmtDate(v);
-  // Timestamp Firestore (compat)
-  try {
-    if (typeof v.toDate === 'function') return _luminiFmtDate(v.toDate());
-  } catch {}
-  return _luminiFmtDate(String(v));
-}
-
 function _ntDailyAttendanceDocId(teamId, dateStr) {
-  const t = String(teamId || '').trim().replace(/\//g, '_');
+  const t = _ntNormalizeTeamId(teamId).replace(/\//g, '_');
   const d = String(dateStr || '').trim();
   return `${t}_${d}`;
 }
@@ -834,7 +976,7 @@ function _ntDailyAttendanceDocId(teamId, dateStr) {
  */
 window._ntGetDailyAttendance = async function(teamId, dateStr) {
   if (!window._dbReady) throw new Error('Firebase ainda não está pronto. Aguarde e tente de novo.');
-  const tid = String(teamId || '').trim();
+  const tid = _ntNormalizeTeamId(teamId);
   const d = String(dateStr || '').trim();
   if (!tid || !d) throw new Error('Equipe e data são obrigatórios.');
   const docId = _ntDailyAttendanceDocId(tid, d);
@@ -867,7 +1009,7 @@ window._ntGetDailyAttendance = async function(teamId, dateStr) {
  */
 window._ntSaveDailyAttendance = async function(opts) {
   if (!window._dbReady) throw new Error('Firebase ainda não está pronto. Aguarde e tente de novo.');
-  const teamId = String(opts.teamId || '').trim();
+  const teamId = _ntNormalizeTeamId(opts.teamId);
   const dateStr = String(opts.date || '').trim();
   const savedBy = String(opts.savedBy || '').trim();
   const savedRole = String(opts.savedRole || '').trim().toLowerCase();
@@ -944,33 +1086,23 @@ window._ntSaveDailyAttendance = async function(opts) {
  */
 window._ntListDailyAttendanceDatesForTeam = async function(opts) {
   if (!window._dbReady) throw new Error('Firebase ainda não está pronto. Aguarde e tente de novo.');
-  const teamId = String(opts && opts.teamId ? opts.teamId : '').trim();
+  const teamId = _ntNormalizeTeamId(opts && opts.teamId ? opts.teamId : '');
   const startDate = String(opts && opts.startDate ? opts.startDate : '').trim();
   const endDate = String(opts && opts.endDate ? opts.endDate : '').trim();
   if (!teamId || !startDate || !endDate) throw new Error('Equipe e intervalo são obrigatórios.');
 
-  const looksLikeIndexError = (e) => {
-    const msg = String((e && (e.message || e.toString())) || '').toLowerCase();
-    return msg.includes('requires an index') || msg.includes('failed-precondition') || msg.includes('index');
-  };
-
+  const q = query(
+    collection(db, DAILY_ATTENDANCE_COL),
+    where('teamId', '==', teamId),
+    where('date', '>=', startDate),
+    where('date', '<=', endDate)
+  );
   let snap;
   try {
-    const q = query(
-      collection(db, DAILY_ATTENDANCE_COL),
-      where('teamId', '==', teamId),
-      where('date', '>=', startDate),
-      where('date', '<=', endDate)
-    );
     snap = await getDocs(q);
   } catch (e) {
-    if (!looksLikeIndexError(e)) throw e;
-    const q2 = query(
-      collection(db, DAILY_ATTENDANCE_COL),
-      where('date', '>=', startDate),
-      where('date', '<=', endDate)
-    );
-    snap = await getDocs(q2);
+    const detail = e && (e.message || String(e)) ? (e.message || String(e)) : 'erro desconhecido';
+    throw new Error(`Falha ao listar datas de frequência (daily_attendance): ${detail}`);
   }
   const out = new Set();
   snap.docs.forEach(d => {
@@ -998,33 +1130,23 @@ window._ntListDailyAttendanceDatesForTeam = async function(opts) {
  */
 window._ntGetDailyAttendanceSummariesForTeam = async function(opts) {
   if (!window._dbReady) throw new Error('Firebase ainda não está pronto. Aguarde e tente de novo.');
-  const teamId = String(opts && opts.teamId ? opts.teamId : '').trim();
+  const teamId = _ntNormalizeTeamId(opts && opts.teamId ? opts.teamId : '');
   const startDate = String(opts && opts.startDate ? opts.startDate : '').trim();
   const endDate = String(opts && opts.endDate ? opts.endDate : '').trim();
   if (!teamId || !startDate || !endDate) throw new Error('Equipe e intervalo são obrigatórios.');
 
-  const looksLikeIndexError = (e) => {
-    const msg = String((e && (e.message || e.toString())) || '').toLowerCase();
-    return msg.includes('requires an index') || msg.includes('failed-precondition') || msg.includes('index');
-  };
-
+  const q = query(
+    collection(db, DAILY_ATTENDANCE_COL),
+    where('teamId', '==', teamId),
+    where('date', '>=', startDate),
+    where('date', '<=', endDate)
+  );
   let snap;
   try {
-    const q = query(
-      collection(db, DAILY_ATTENDANCE_COL),
-      where('teamId', '==', teamId),
-      where('date', '>=', startDate),
-      where('date', '<=', endDate)
-    );
     snap = await getDocs(q);
   } catch (e) {
-    if (!looksLikeIndexError(e)) throw e;
-    const q2 = query(
-      collection(db, DAILY_ATTENDANCE_COL),
-      where('date', '>=', startDate),
-      where('date', '<=', endDate)
-    );
-    snap = await getDocs(q2);
+    const detail = e && (e.message || String(e)) ? (e.message || String(e)) : 'erro desconhecido';
+    throw new Error(`Falha ao carregar resumos de frequência (daily_attendance): ${detail}`);
   }
   const out = new Map();
   snap.docs.forEach(d => {
@@ -1072,35 +1194,23 @@ window._ntGetDailyAttendanceSummariesForTeam = async function(opts) {
  */
 window._ntListDailyAttendanceDocsForTeam = async function(opts) {
   if (!window._dbReady) throw new Error('Firebase ainda não está pronto. Aguarde e tente de novo.');
-  const teamId = String(opts && opts.teamId ? opts.teamId : '').trim();
+  const teamId = _ntNormalizeTeamId(opts && opts.teamId ? opts.teamId : '');
   const startDate = String(opts && opts.startDate ? opts.startDate : '').trim();
   const endDate = String(opts && opts.endDate ? opts.endDate : '').trim();
   if (!teamId || !startDate || !endDate) throw new Error('Equipe e intervalo são obrigatórios.');
 
-  const looksLikeIndexError = (e) => {
-    const msg = String((e && (e.message || e.toString())) || '').toLowerCase();
-    return msg.includes('requires an index') || msg.includes('failed-precondition') || msg.includes('index');
-  };
-
+  const q = query(
+    collection(db, DAILY_ATTENDANCE_COL),
+    where('teamId', '==', teamId),
+    where('date', '>=', startDate),
+    where('date', '<=', endDate)
+  );
   let snap;
   try {
-    // Caminho preferencial (rápido) — pode exigir índice composto (teamId + date).
-    const q = query(
-      collection(db, DAILY_ATTENDANCE_COL),
-      where('teamId', '==', teamId),
-      where('date', '>=', startDate),
-      where('date', '<=', endDate)
-    );
     snap = await getDocs(q);
   } catch (e) {
-    // Bypass definitivo: busca por data apenas (sem índice composto) e filtra no front-end.
-    if (!looksLikeIndexError(e)) throw e;
-    const q2 = query(
-      collection(db, DAILY_ATTENDANCE_COL),
-      where('date', '>=', startDate),
-      where('date', '<=', endDate)
-    );
-    snap = await getDocs(q2);
+    const detail = e && (e.message || String(e)) ? (e.message || String(e)) : 'erro desconhecido';
+    throw new Error(`Falha ao listar documentos de frequência (daily_attendance): ${detail}`);
   }
 
   const out = snap.docs
@@ -1109,196 +1219,32 @@ window._ntListDailyAttendanceDocsForTeam = async function(opts) {
     .map(x => ({
       id: String(x.id || ''),
       date: String(x.date || '').trim(),
-      teamId: String(x.teamId || '').trim(),
+      teamId: _ntNormalizeTeamId(x.teamId),
       records: Array.isArray(x.records) ? x.records : []
     }))
-    .filter(x => String(x.teamId || '').trim() === teamId)
+    .filter(x => _ntNormalizeTeamId(x.teamId) === teamId)
     .sort((a, b) => String(a.date).localeCompare(String(b.date)));
   return out;
 };
 
 /**
- * Coleção legada `frequencias`: tenta buscar docs do período e normalizar para o mesmo shape de `daily_attendance`.
- * Importante: algumas bases salvaram a data como Timestamp; outras, como string.
+ * Lista documentos `daily_attendance` no intervalo (campo `date` sempre YYYY-MM-DD).
+ * Usado pelo dashboard/calendário de frequência; normaliza status das linhas (ex.: P/F).
  *
  * @param {{ teamId: string, startDate: string, endDate: string }} opts
  * @returns {Promise<Array<{ id: string, date: string, teamId: string, records: any[] }>>}
  */
-window._ntListFrequenciasDocsForTeam = async function(opts) {
-  if (!window._dbReady) throw new Error('Firebase ainda não está pronto. Aguarde e tente de novo.');
-  const teamId = String(opts && opts.teamId ? opts.teamId : '').trim();
-  const startDate = String(opts && opts.startDate ? opts.startDate : '').trim();
-  const endDate = String(opts && opts.endDate ? opts.endDate : '').trim();
-  if (!teamId || !startDate || !endDate) throw new Error('Equipe e intervalo são obrigatórios.');
-
-  const startTs = Timestamp.fromDate(new Date(startDate + 'T00:00:00'));
-  const endTs = Timestamp.fromDate(new Date(endDate + 'T23:59:59'));
-
-  const looksLikeIndexError = (e) => {
-    const msg = String((e && (e.message || e.toString())) || '').toLowerCase();
-    return msg.includes('requires an index') || msg.includes('failed-precondition') || msg.includes('index');
-  };
-
-  // 1) tenta por string (field `date` ou `data`)
-  const tryStringRange = async () => {
-    const out = [];
-    for (const field of ['date', 'data']) {
-      try {
-        let snap;
-        try {
-          const q = query(
-            collection(db, FREQUENCIAS_COL),
-            where('teamId', '==', teamId),
-            where(field, '>=', startDate),
-            where(field, '<=', endDate)
-          );
-          snap = await getDocs(q);
-        } catch (e) {
-          // Bypass definitivo: busca por data apenas e filtra `teamId` no front-end.
-          if (!looksLikeIndexError(e)) throw e;
-          const q2 = query(
-            collection(db, FREQUENCIAS_COL),
-            where(field, '>=', startDate),
-            where(field, '<=', endDate)
-          );
-          snap = await getDocs(q2);
-        }
-        snap.docs.forEach(d => out.push({ id: d.id, ...(d.data() || {}) }));
-        if (out.length) break;
-      } catch (e) {
-        // ignora: pode falhar por índice/campo inexistente
-      }
-    }
-    return out;
-  };
-
-  // 2) tenta por timestamp (field `date` ou `data`)
-  const tryTimestampRange = async () => {
-    const out = [];
-    for (const field of ['date', 'data']) {
-      try {
-        let snap;
-        try {
-          const q = query(
-            collection(db, FREQUENCIAS_COL),
-            where('teamId', '==', teamId),
-            where(field, '>=', startTs),
-            where(field, '<=', endTs)
-          );
-          snap = await getDocs(q);
-        } catch (e) {
-          // Bypass definitivo: busca por data apenas e filtra `teamId` no front-end.
-          if (!looksLikeIndexError(e)) throw e;
-          const q2 = query(
-            collection(db, FREQUENCIAS_COL),
-            where(field, '>=', startTs),
-            where(field, '<=', endTs)
-          );
-          snap = await getDocs(q2);
-        }
-        snap.docs.forEach(d => out.push({ id: d.id, ...(d.data() || {}) }));
-        if (out.length) break;
-      } catch (e) {
-        // ignora: pode falhar por índice/campo inexistente
-      }
-    }
-    return out;
-  };
-
-  let raw = await tryStringRange();
-  if (!raw.length) raw = await tryTimestampRange();
-
-  // Normaliza para {date:'YYYY-MM-DD', teamId, records:[{employeeId,status,...}]}
-  const normalized = raw
-    .map(x => {
-      const dateVal = _ntTryDateField(x, ['date', 'data', 'day', 'dia', 'createdAt']);
-      const dateStr = _ntCoerceAnyDateToISO(dateVal);
-
-      const recsRaw =
-        Array.isArray(x.records) ? x.records :
-        Array.isArray(x.frequencias) ? x.frequencias :
-        Array.isArray(x.lista) ? x.lista :
-        Array.isArray(x.presencas) ? x.presencas :
-        [];
-
-      const records = (Array.isArray(recsRaw) ? recsRaw : [])
-        .map(r => {
-          if (!r) return null;
-          const employeeId = String(
-            r.employeeId != null ? r.employeeId :
-            r.colaboradorId != null ? r.colaboradorId :
-            r.id != null ? r.id :
-            r.matricula != null ? r.matricula :
-            ''
-          ).trim();
-          if (!employeeId) return null;
-          const status = _ntNormAttendanceStatus(
-            r.status != null ? r.status :
-            r.situacao != null ? r.situacao :
-            r.presenca != null ? r.presenca :
-            r.valor != null ? r.valor :
-            ''
-          );
-          return {
-            employeeId,
-            status,
-            createdBy: r.createdBy,
-            createdRole: r.createdRole,
-            updatedBy: r.updatedBy,
-            updatedRole: r.updatedRole,
-            updatedAt: r.updatedAt
-          };
-        })
-        .filter(Boolean);
-
-      return {
-        id: String(x.id || ''),
-        date: dateStr,
-        teamId: String(x.teamId || teamId).trim(),
-        records
-      };
-    })
-    .filter(d => d && d.date && d.teamId)
-    .filter(d => String(d.teamId || '').trim() === teamId)
-    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
-
-  return normalized;
-};
-
-/**
- * Lista docs do período para dashboard/calendário, tentando `daily_attendance` (novo) e `frequencias` (legado).
- * @param {{ teamId: string, startDate: string, endDate: string }} opts
- * @returns {Promise<Array<{ id: string, date: string, teamId: string, records: any[] }>>}
- */
 window._ntListAttendanceDocsForTeam = async function(opts) {
-  const teamId = String(opts && opts.teamId ? opts.teamId : '').trim();
-  const startDate = String(opts && opts.startDate ? opts.startDate : '').trim();
-  const endDate = String(opts && opts.endDate ? opts.endDate : '').trim();
-  if (!teamId || !startDate || !endDate) throw new Error('Equipe e intervalo são obrigatórios.');
-
-  let primary = [];
-  try {
-    primary = await window._ntListDailyAttendanceDocsForTeam({ teamId, startDate, endDate });
-  } catch {}
-  if (Array.isArray(primary) && primary.length) {
-    // garante status normalizado (se alguém salvou P/F por engano na daily_attendance)
-    return primary.map(d => ({
-      ...d,
-      date: String(d.date || '').trim(),
-      teamId: String(d.teamId || teamId).trim(),
-      records: (Array.isArray(d.records) ? d.records : []).map(r => ({
-        ...r,
-        status: _ntNormAttendanceStatus(r && r.status)
-      }))
-    }));
-  }
-
-  // fallback legado
-  try {
-    return await window._ntListFrequenciasDocsForTeam({ teamId, startDate, endDate });
-  } catch (e) {
-    return [];
-  }
+  const rows = await window._ntListDailyAttendanceDocsForTeam(opts);
+  return rows.map(d => ({
+    ...d,
+    date: String(d.date || '').trim(),
+    teamId: _ntNormalizeTeamId(d.teamId),
+    records: (Array.isArray(d.records) ? d.records : []).map(r => ({
+      ...r,
+      status: _ntNormAttendanceStatus(r && r.status)
+    }))
+  }));
 };
 
 // ─── Tela de loading ─────────────────────────
