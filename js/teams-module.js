@@ -753,5 +753,3 @@ window._teamsRenderAdmin   = function() { window._teamsRender('page-admin-teams'
 window._teamsRenderBoss    = function() { window._teamsRender('page-boss-teams',        true);  };
 window._teamsRenderManager = function() { window._teamsRender('page-manager-teams',    false); };
 window._teamsRenderSup     = function() { window._teamsRender('page-supervisor-teams', false); };
-
-console.log('✅ Teams Module carregado.');

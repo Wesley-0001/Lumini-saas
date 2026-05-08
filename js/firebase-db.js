@@ -11,7 +11,7 @@
 
 // ─── SDK Firebase via CDN ───────────────────
 import { initializeApp }       from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { getFirestore, enableIndexedDbPersistence, collection, doc, getDocs, getDoc, setDoc, deleteDoc, writeBatch, onSnapshot, query, where, updateDoc, addDoc, Timestamp }
+import { initializeFirestore, enableIndexedDbPersistence, collection, doc, getDocs, getDoc, setDoc, deleteDoc, writeBatch, onSnapshot, query, where, updateDoc, addDoc, Timestamp }
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import {
   getAuth,
@@ -36,40 +36,15 @@ if (!firebaseConfig || !firebaseConfig.apiKey) {
   throw new Error(msg);
 }
 
-// Diagnóstico rápido para erros `auth/api-key-not-valid` (restrição/rotacionamento da chave)
-try {
-  const origin = (globalThis?.location?.origin) || '(sem origin)';
-  const rawKey = String(firebaseConfig.apiKey ?? '');
-  const trimmed = rawKey.trim();
-  const looksLikeKey = /^AIza[0-9A-Za-z\-_]{10,}$/.test(trimmed);
-  if (rawKey !== trimmed || !looksLikeKey) {
-    console.warn('[Firebase] apiKey suspeita:', {
-      origin,
-      len: rawKey.length,
-      trimmedLen: trimmed.length,
-      startsWith: rawKey.slice(0, 6)
-    });
-  } else {
-    console.log('[Firebase] Config OK (apiKey):', {
-      origin,
-      len: trimmed.length,
-      startsWith: trimmed.slice(0, 6),
-      endsWith: trimmed.slice(-4)
-    });
-  }
-} catch (e) {
-  console.warn('[Firebase] Falha no diagnóstico da apiKey:', e);
-}
-
 const firebaseApp = initializeApp(firebaseConfig);
-const db          = getFirestore(firebaseApp);
+// Force “single owning tab” to evitar `failed-precondition` em múltiplas abas.
+const db          = initializeFirestore(firebaseApp, { experimentalForceOwningTab: true });
 const auth        = getAuth(firebaseApp);
 
 // ─── Persistência do Auth (IMPORTANTE) ─────────
 // Garante que o login sobreviva ao refresh e evita "sessão fantasma" por SESSION/NONE.
 setPersistence(auth, browserLocalPersistence)
-  .then(() => console.log('[Auth] Persistência: LOCAL'))
-  .catch((err) => console.warn('[Auth] Falha ao setar persistência LOCAL:', err?.code || err, err?.message || ''));
+  .catch((err) => console.error('[Auth] Falha ao setar persistência LOCAL:', err?.code || err, err?.message || ''));
 
 // ─── Firebase Auth (exposto para app.js) ──────
 window._fbAuth = auth;
@@ -77,6 +52,42 @@ window._fbOnAuthStateChanged = onAuthStateChanged;
 window._fbOnIdTokenChanged = onIdTokenChanged;
 window._fbSignInWithEmailAndPassword = signInWithEmailAndPassword;
 window._fbSignOut = signOut;
+
+/**
+ * Garante (best-effort) que exista um doc em /users/{uid} para o usuário atual.
+ * Útil para desbloquear o app quando o Auth está ok, mas o perfil Firestore ainda não existe.
+ *
+ * @param {object} input
+ * @param {string} input.uid
+ * @param {string} input.email
+ * @param {string} input.role
+ * @param {string} input.name
+ * @param {string=} input.leaderKey
+ * @returns {Promise<boolean>}
+ */
+window._ntEnsureUserDocForUid = async function(input) {
+  try {
+    const uid = String(input?.uid || '').trim();
+    const email = String(input?.email || '').trim().toLowerCase();
+    const role = String(input?.role || '').trim() || 'supervisor';
+    const name = String(input?.name || '').trim() || email;
+    const leaderKey = (input?.leaderKey != null) ? String(input?.leaderKey || '').trim() : undefined;
+    if (!uid || !email) return false;
+
+    const payload = {
+      email,
+      name,
+      role,
+      ...(leaderKey ? { leaderKey } : {}),
+      updatedAt: Timestamp.now()
+    };
+    await setDoc(doc(db, 'users', uid), payload, { merge: true });
+    return true;
+  } catch (e) {
+    console.error('[Firestore] Falha ao garantir /users/{uid}:', e?.code || e, e?.message || '');
+    return false;
+  }
+};
 
 /**
  * Busca o perfil do usuário no Firestore, priorizando `users` e fallback em `leaders`.
@@ -95,12 +106,10 @@ window._ntFetchProfileByEmail = async function(email) {
     if (uid) {
       const ref = doc(db, 'users', uid);
       const snap = await getDoc(ref);
-      console.log('BUSCA POR UID:', snap.exists());
       if (snap.exists()) return { ...snap.data(), id: snap.id };
     }
   } catch (e) {
     // Se der permission-denied aqui, propaga (é o caminho "permitido" pelas rules).
-    console.warn('[Lumini] Falha ao buscar perfil por UID no Firestore:', e);
     const code = String(e?.code || e?.name || '').toLowerCase();
     const msg = String(e?.message || '').toLowerCase();
     if (code.includes('permission-denied') || msg.includes('permission denied')) throw e;
@@ -117,7 +126,6 @@ window._ntFetchProfileByEmail = async function(email) {
   try {
     return (await tryCol('users')) || (await tryCol('leaders'));
   } catch (e) {
-    console.warn('[Lumini] Falha ao buscar perfil no Firestore:', e);
     const code = String(e?.code || e?.name || '').toLowerCase();
     const msg = String(e?.message || '').toLowerCase();
     if (code.includes('permission-denied') || msg.includes('permission denied')) throw e;
@@ -383,21 +391,17 @@ async function fetchEmployeesFromLuminiXlsx() {
 async function loadEmployeesWithSheetFallback() {
   try {
     const data = await fetchEmployeesFromLuminiCsv();
-    (window.luminiLog || console.log)('[RH CSV] employees carregados:', data.length);
     window._employeesFromSheet = true;
     window._employeesSheetSource = 'csv';
     return data;
   } catch (eCsv) {
-    (window.luminiWarn || console.warn)('[RH CSV] falha:', eCsv && eCsv.message ? eCsv.message : eCsv);
   }
   try {
     const data = await fetchEmployeesFromLuminiXlsx();
-    (window.luminiLog || console.log)('[PLANILHA XLSX] employees carregados:', data.length);
     window._employeesFromSheet = true;
     window._employeesSheetSource = 'xlsx';
     return data;
   } catch (e) {
-    (window.luminiWarn || console.warn)('[PLANILHA] falha, usando Firestore:', e && e.message ? e.message : e);
     window._employeesFromSheet = false;
     window._employeesSheetSource = 'firestore';
     return loadCollection('employees');
@@ -406,9 +410,7 @@ async function loadEmployeesWithSheetFallback() {
 
 // ─── Carrega coleção do Firestore ────────────
 async function loadCollection(name) {
-  (window.luminiLog || console.log)('[BOOT] antes getDocs coleção:', name, '(Promise.all)');
   const snap = await getDocs(collection(db, name));
-  (window.luminiLog || console.log)('[BOOT] ok getDocs coleção:', name, '(Promise.all)', `(${snap.size} docs)`);
   return snap.docs.map(d => ({ ...d.data(), id: d.id }));
 }
 
@@ -428,7 +430,6 @@ function _dedupeUsersByEmail(usrs) {
       continue;
     }
     if (seen.has(em)) {
-      console.warn('[Lumini] Registro em users com e-mail duplicado ignorado na migração:', u.id, em);
       continue;
     }
     seen.add(em);
@@ -487,14 +488,11 @@ async function persistCollection(name, arr) {
 // ─── Apaga e re-insere uma coleção inteira ───
 async function wipeAndSeed(name, data) {
   try {
-    console.log(`[BOOT] antes getDocs coleção: ${name} (wipeAndSeed)`);
     const snap  = await getDocs(collection(db, name));
-    console.log(`[BOOT] ok getDocs coleção: ${name} (wipeAndSeed)`, `(${snap.size} docs)`);
     const batch = writeBatch(db);
     snap.docs.forEach(d => batch.delete(d.ref));
     await batch.commit();
     if (data.length > 0) await persistCollection(name, data);
-    console.log(`✅ ${name} re-populado com ${data.length} registros.`);
   } catch(e) {
     console.error(`[Firebase] Erro ao resetar ${name}:`, e);
   }
@@ -502,13 +500,11 @@ async function wipeAndSeed(name, data) {
 
 // ─── Seed automático (desativado) ────────────
 async function seedIfNeeded() {
-  console.log('[BOOT] seed automático desativado (seedIfNeeded).');
 }
 
 // ─── Reset manual (console do browser) ───────
 window.resetFirebaseData = async function() {
   if (!confirm('⚠️ Isso vai APAGAR TODOS os dados no Firebase! Confirma?')) return;
-  console.log('🔄 Resetando dados...');
   showLoadingScreen(true);
   await wipeAndSeed('employees',   []);
   await wipeAndSeed('evaluations', []);
@@ -516,7 +512,6 @@ window.resetFirebaseData = async function() {
   await wipeAndSeed('teams',       []);
   // Recria carreiras
   await wipeAndSeed('careers', window.DEMO_CAREERS || []);
-  console.log('✅ Reset concluído! Recarregando...');
   setTimeout(() => location.reload(), 1500);
 };
 
@@ -529,12 +524,9 @@ window.initFirebase = async function() {
       await enableIndexedDbPersistence(db);
     } catch (err) {
       const code = err && err.code;
-      if (code === 'failed-precondition') {
-        console.warn('[Firestore] Persistência offline: outra aba já usa IndexedDB; use uma única aba para cache completo.');
-      } else if (code === 'unimplemented') {
-        console.warn('[Firestore] Persistência IndexedDB não disponível neste ambiente.');
-      } else {
-        console.warn('[Firestore] Não foi possível ativar persistência offline:', err && err.message ? err.message : err);
+      // Sem logs de aviso (mantemos apenas erros críticos no console).
+      if (code !== 'failed-precondition' && code !== 'unimplemented') {
+        console.error('[Firestore] Falha ao ativar persistência offline:', err && err.message ? err.message : err);
       }
     }
 
@@ -556,15 +548,12 @@ window.initFirebase = async function() {
     // ── Limpa employees sem vínculo RH (cadastrados manualmente, ex: Caio, Leonardo) — só se veio do Firestore ──
     const manualEmps = !window._employeesFromSheet ? emps.filter(e => !e.rhMatricula) : [];
     if (manualEmps.length > 0) {
-      console.warn(`🧹 Removendo ${manualEmps.length} funcionário(s) sem vínculo RH (cadastro manual):`,
-        manualEmps.map(e => e.name));
       try {
         const cleanBatch = writeBatch(db);
         manualEmps.forEach(e => cleanBatch.delete(doc(db, 'employees', String(e.id))));
         await cleanBatch.commit();
-        console.log('✅ Funcionários manuais removidos com sucesso.');
       } catch(err) {
-        console.error('❌ Erro ao remover funcionários manuais:', err.message);
+        console.error('[Firebase] Erro ao remover funcionários manuais:', err && err.message ? err.message : err);
       }
     }
     // Planilha: todos os registros com nome; Firestore: apenas com matrícula RH (comportamento anterior)
@@ -577,11 +566,9 @@ window.initFirebase = async function() {
     const migratedEmps = mig.emps;
     excs = mig.excs;
     if (mig.usersTouched) {
-      console.log('[Lumini] Atualizando e-mails legacy na coleção users');
       await persistCollection('users', usrs);
     }
     if (mig.empsTouched && !window._employeesFromSheet) {
-      console.log('[Lumini] Atualizando supervisor (e-mails legacy) em employees');
       await persistCollection('employees', migratedEmps);
     }
     if (mig.excTouched) {
@@ -687,9 +674,8 @@ function listenRealtime() {
   onSnapshot(collection(db, INTERNAL_COMMS_COL), snap => {
     if (!window._dbReady) return;
     window._cache.internalComms = snap.docs.map(d => ({ ...d.data(), id: d.id }));
-    (window.luminiLog || console.log)('[Comms DEBUG] snapshot internal_comms:', window._cache.internalComms.length, 'docs');
     if (window.currentPage === 'comms' && window._commsRender) window._commsRender();
-  }, err => console.warn('[internal_comms]', err && err.message ? err.message : err));
+  }, err => console.error('[internal_comms]', err && err.message ? err.message : err));
 }
 
 // ─── FUNÇÕES SÍNCRONAS (usadas pelo app.js) ──
@@ -770,7 +756,7 @@ window._ntSubscribeInAppNotifications = function(userEmail) {
     window._cache.notifications = snap.docs.map(d => ({ ...d.data(), id: d.id }));
     if (window.updateNotifBadge) window.updateNotifBadge();
     else if (window._ntRefreshInAppBadge) window._ntRefreshInAppBadge();
-  }, err => console.warn('[in_app_notifications]', err.message));
+  }, err => console.error('[in_app_notifications]', err && err.message ? err.message : err));
 };
 
 window._ntUnsubscribeInAppNotifications = function() {
@@ -827,9 +813,8 @@ window._ntPersistInternalComm = async function(item) {
   try {
     const clean = JSON.parse(JSON.stringify(item));
     await setDoc(doc(db, INTERNAL_COMMS_COL, String(item.id)), clean, { merge: true });
-    (window.luminiLog || console.log)('[Comms DEBUG] persist internal_comms docId=', item.id);
   } catch (e) {
-    console.warn('[internal_comms] persist:', e && e.message ? e.message : e);
+    console.error('[internal_comms] persist:', e && e.message ? e.message : e);
   }
 };
 

@@ -491,6 +491,4 @@ window._usersResetPerms = function(email, role) {
 // ─── Expõe DEFAULT_ROLE_PERMISSIONS para o modal ──
 // (importado do permissions.js via window)
 window._usersRenderPage = function() { window._usersRender('page-admin-users'); };
-
-console.log('✅ Users Module carregado.');
 })();

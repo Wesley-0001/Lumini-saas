@@ -26,6 +26,20 @@
 
 <!-- TELA DE LOGIN -->
 <div id="page-login" class="page active" style="display:none">
+
+  <!-- ⚠️ ⚠️ ⚠️ BLOCO TEMPORÁRIO — SEED DE USUÁRIOS ⚠️ ⚠️ ⚠️
+       Botão de uso ÚNICO para popular Firebase Auth + Firestore a partir de
+       DEMO_USERS (ver função seedUsersToFirebase em js/app.js).
+       🚨 REMOVER ESTE BLOCO E A FUNÇÃO em js/app.js APÓS O PRIMEIRO USO. 🚨 -->
+  <div id="lumini-seed-banner" style="position:fixed;top:0;left:0;right:0;z-index:99998;display:flex;justify-content:center;padding:12px;background:rgba(255,255,255,0.96);box-shadow:0 2px 12px rgba(0,0,0,0.15)">
+    <button type="button" id="lumini-seed-btn"
+            onclick="window.seedUsersToFirebase && window.seedUsersToFirebase()"
+            style="padding:10px 20px;font-weight:700;font-size:14px;background:#1a1a1a;color:#fff;border:0;border-radius:8px;cursor:pointer;box-shadow:0 4px 12px rgba(0,0,0,0.25)">
+      🚀 Sincronizar Base de Dados
+    </button>
+  </div>
+  <!-- ⚠️ FIM DO BLOCO TEMPORÁRIO — REMOVER APÓS O SEED ⚠️ -->
+
   <div class="login-bg">
     <div class="stamps-container" id="stamps-container">
       <div class="stamp-float stamp-tl" data-ref="AD0901" style="--size:145px;--dur:7s;--delay:0s;--rot:-14deg">

@@ -208,6 +208,4 @@ window._rhRenderHolerites = function(targetId) {
 window._rhRenderHoleritesIn = function(targetId) {
   window._rhRenderHolerites(targetId || 'page-admin-rh-holerites');
 };
-
-console.log('✅ RH Holerites Module carregado.');
 })();

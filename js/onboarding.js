@@ -535,6 +535,4 @@ window.resetOnboardingTour = function(role) {
 
 window._ntIsTourDone = _isTourDone;
 
-console.log('✅ Onboarding Module carregado.');
-
 })();

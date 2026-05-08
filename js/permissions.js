@@ -125,5 +125,3 @@ window.getUserPermissions = function(email, role) {
   const saved = _loadSavedPermissions(email);
   return Object.assign({}, base, saved);
 };
-
-console.log('✅ Permissions Module carregado.');

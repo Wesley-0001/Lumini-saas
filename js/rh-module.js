@@ -140,7 +140,6 @@ window.createRHNotificacao = function(data) {
   // Persiste no Firebase se disponível
   if (window._cache) window._cache.rhNotificacoes = window._rhNotificacoes;
   updateRHPromosBadge();
-  console.log('[RH] Nova promoção homologada:', notif.employeeName);
 };
 
 window.getRHNotificacoes = function() {
@@ -233,7 +232,7 @@ window.persistHRCollection = async function(name, arr) {
       await window._persistCollection(name, arr);
     }
   } catch(e) {
-    console.warn('[RH] Erro ao salvar no Firebase:', e.message);
+    console.error('[RH] Erro ao salvar no Firebase:', e && e.message ? e.message : e);
   }
 };
 
@@ -244,7 +243,6 @@ window.initHRModule = async function() {
     const emps = window.getEmployees();
     if (emps && emps.length) {
       window._cache.hrEmployees = window.appEmployeesToHREmployees(emps);
-      console.log(`✅ RH: ${window._cache.hrEmployees.length} funcionários (fonte Rh.Lumini CSV/planilha).`);
       return;
     }
   }
@@ -253,13 +251,11 @@ window.initHRModule = async function() {
       const hrEmps = await window._loadCollection('hrEmployees');
       if (hrEmps && hrEmps.length > 0) {
         window._cache.hrEmployees = hrEmps;
-        console.log(`✅ RH: ${hrEmps.length} funcionários carregados do Firebase.`);
         return;
       }
     } catch (e) { /* fallback */ }
   }
   window._cache.hrEmployees = window.HR_EMPLOYEES_SEED || [];
-  console.log(`✅ RH: ${window._cache.hrEmployees.length} funcionários (fallback).`);
 };
 
 // ─── RENDER DASHBOARD RH (INTERATIVO POR ANO) ─────────────────────
@@ -1835,5 +1831,5 @@ ${n.obsRH ? `<div class="section" style="border-color:#059669"><div class="secti
 
 // ─── INICIALIZAÇÃO ───────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
-  window.initHRModule().catch(console.warn);
+  window.initHRModule().catch(console.error);
 });

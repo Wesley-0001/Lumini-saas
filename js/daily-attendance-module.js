@@ -355,7 +355,7 @@
         return set;
       }
     } catch (e) {
-      console.warn('[daily-attendance calendar] dots', e);
+      console.error('[daily-attendance calendar] dots', e);
     }
     const empty = new Set();
     _monthDotsCache.set(key, empty);
@@ -383,7 +383,7 @@
         return map;
       }
     } catch (e) {
-      console.warn('[daily-attendance calendar] summaries', e);
+      console.error('[daily-attendance calendar] summaries', e);
     }
     const empty = new Map();
     _monthSummaryCache.set(key, empty);
@@ -1072,7 +1072,7 @@
           docExists = !!res.exists;
           existing = res.data;
         }
-      } catch (e) { console.warn('[daily-attendance]', e); }
+      } catch (e) { console.error('[daily-attendance]', e); }
 
       _state = {
         teamId, dateStr, docExists,
@@ -1108,7 +1108,7 @@
         existing = res.data;
       }
     } catch (e) {
-      console.warn('[daily-attendance]', e);
+      console.error('[daily-attendance]', e);
       if (window._ntShowToast) window._ntShowToast(e.message || 'Erro ao carregar frequência.', 'error');
     }
 
@@ -1353,7 +1353,6 @@
       throw new Error('Serviço indisponível: _ntListAttendanceDocsForTeam');
     }
     const data = await window._ntListAttendanceDocsForTeam({ teamId, startDate, endDate });
-    console.log('Dados recuperados para o dashboard:', data);
     return data;
   }
 
@@ -1620,12 +1619,11 @@
         docs = [];
       }
 
-      console.log('Dados processados no Front:', docs);
       const payload = _computeConsolidatedPayload(teamEmployees, docs, y, m0, shift);
       _consCache.set(key, { teamId, y, m0, shift, computedAt: Date.now(), payload });
       _renderConsolidatedUi(payload, teamId);
     } catch (e) {
-      console.warn('[daily-attendance consolidated]', e);
+      console.error('[daily-attendance consolidated]', e);
       // Fallback final: tenta ao menos montar a UI com CSV (sem registros)
       try {
         await _ensureEmployeesFromCsvLoaded();

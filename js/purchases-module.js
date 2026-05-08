@@ -557,7 +557,7 @@ function _advancePurchase(id, status) {
   }
   savePurchases(arr);
   if (status === 'approved' && updated && window._ntNotifyPurchaseApproved) {
-    try { window._ntNotifyPurchaseApproved(updated); } catch (e) { console.warn(e); }
+    try { window._ntNotifyPurchaseApproved(updated); } catch (e) { console.error(e); }
   }
   window._purchRender('page-purchases');
 }
@@ -579,7 +579,7 @@ window._purchRequestCancel = async function(id) {
   arr[idx].cancelRequestedAt = Date.now();
   savePurchases(arr);
   if (window._ntNotifyPurchaseCancelRequested) {
-    try { window._ntNotifyPurchaseCancelRequested(arr[idx]); } catch (e) { console.warn(e); }
+    try { window._ntNotifyPurchaseCancelRequested(arr[idx]); } catch (e) { console.error(e); }
   }
   _toast('Solicitação de cancelamento enviada.', 'success');
   window._purchRender('page-purchases');
@@ -612,7 +612,7 @@ window._purchResolveCancel = async function(id, approved) {
   }
   savePurchases(arr);
   if (window._ntNotifyPurchaseCancelResolved) {
-    try { window._ntNotifyPurchaseCancelResolved(arr[idx], approved); } catch (e) { console.warn(e); }
+    try { window._ntNotifyPurchaseCancelResolved(arr[idx], approved); } catch (e) { console.error(e); }
   }
   _toast(approved ? 'Cancelamento aprovado.' : 'Pedido de cancelamento recusado.', approved ? 'success' : 'info');
   window._purchRender('page-purchases');
@@ -800,6 +800,4 @@ window._prodDelete = async function(id) {
 
 // ─── EXPÕE render para o app.js ─────────────
 window._purchRenderPage = function() { window._purchRender('page-purchases'); };
-
-console.log('✅ Purchases Module carregado.');
 })();

@@ -412,6 +412,4 @@
     ensurePanel();
     refreshBadge();
   };
-
-  console.log('✅ notifications-module carregado.');
 })();

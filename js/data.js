@@ -304,7 +304,7 @@ window.DEMO_EMPLOYEES    = DEMO_EMPLOYEES;
     });
     if (changed) localStorage.setItem('nt_users_custom', JSON.stringify(custom));
   } catch (e) {
-    console.warn('[Lumini] Migração nt_users_custom:', e);
+    console.error('[Lumini] Migração nt_users_custom:', e);
   }
 })();
 window.DEMO_CAREERS      = DEMO_CAREERS;

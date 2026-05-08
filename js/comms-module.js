@@ -37,7 +37,7 @@
     lastUserSearchResults: [],
   };
 
-  const _dlog = (...args) => (window.luminiLog || console.log)(...args);
+  const _dlog = () => {};
 
   function _toast(msg, type = 'success') {
     if (window._ntShowToast) window._ntShowToast(msg, type);
@@ -780,7 +780,7 @@
     _renderAll();
     _toast('Comunicado enviado.', 'success');
     if (window._ntNotifyCommsPublished) {
-      try { window._ntNotifyCommsPublished(item); } catch (e) { console.warn(e); }
+      try { window._ntNotifyCommsPublished(item); } catch (e) { console.error(e); }
     }
   }
 

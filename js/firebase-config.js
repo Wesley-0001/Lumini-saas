@@ -1,18 +1,37 @@
-/* =============================================
-   FIREBASE-CONFIG.JS — Fonte única de configuração
-   Lumini — Gestão de Carreira & Polivalência
+/*
+  ============================================================
+  FIREBASE-CONFIG.JS — Fonte única de configuração
+  Lumini — Gestão de Carreira & Polivalência
+  ============================================================
 
-   ▸ Script CLÁSSICO (sem type="module") — executa
-     SÍNCRONAMENTE quando encontrado no HTML, antes
-     de qualquer módulo deferido.
-   ▸ Centraliza a config do Firebase para que tanto
-     o módulo `firebase-db.js` quanto scripts clássicos
-     (app.js etc.) leiam do mesmo lugar.
-   ▸ DEVE ser carregado ANTES de todos os outros scripts
-     que dependem de `window.firebaseConfig`.
+  ## Manual rápido: como trocar a API Key no futuro
 
-   Projeto Firebase: lumini-sabor-nt
-============================================= */
+  Esta aplicação lê o config do Firebase a partir de `window.firebaseConfig`
+  (definido aqui) e o módulo `js/firebase-db.js` inicializa o Firebase usando
+  exatamente este objeto.
+
+  Quando a API Key for rotacionada/restrita no Google Cloud, o sintoma típico
+  no front é falha de autenticação/conexão (ex.: `auth/api-key-not-valid`).
+
+  Passo a passo (Google Cloud Console):
+  - Acesse o projeto correto no Google Cloud Console.
+  - Vá em **APIs e serviços → Credenciais**.
+  - Encontre a credencial **Chave de API** usada pelo Firebase e escolha:
+    - **Editar** para ajustar restrições (HTTP referrers / websites), ou
+    - **Criar chave** / **Rotacionar** (se necessário).
+  - Copie a nova chave e substitua o valor em `apiKey` abaixo.
+
+  Observações importantes:
+  - Esta chave deve ser para uso **Web** e normalmente é restringida por domínio
+    (HTTP referrers). Se você alterar o domínio (ex.: novo host), atualize as
+    restrições na mesma tela do Google Cloud Console.
+  - Cole a chave sem espaços/quebras de linha. Este arquivo aplica `.trim()`
+    como proteção contra caracteres invisíveis.
+
+  Ordem dos scripts:
+  - `js/firebase-config.js` deve ser carregado ANTES de qualquer arquivo que
+    dependa de `window.firebaseConfig` (incluindo `js/firebase-db.js` e `js/app.js`).
+*/
 
 (function () {
   'use strict';

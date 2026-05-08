@@ -136,11 +136,10 @@ async function fetchEmployee(employeeId) {
   const ref = doc(db, 'employees', id);
   const snap = await getDoc(ref);
   if (!snap.exists()) {
-    console.warn(PORTAL_LOG, 'fetchEmployee: documento não existe em employees/', id);
+    console.error(PORTAL_LOG, 'fetchEmployee: documento não existe em employees/', id);
     return null;
   }
   const emp = { id: snap.id, ...snap.data() };
-  console.log(PORTAL_LOG, 'fetchEmployee: OK', { employeeDocId: emp.id, name: emp.name, rhMatricula: emp.rhMatricula });
   return emp;
 }
 
@@ -226,7 +225,7 @@ async function fetchHoleritesForEmployee(employeeId, rhMatricula) {
     const snapEmp = await getDocs(qEmp);
     addSnap(snapEmp);
   } catch (e) {
-    console.warn(PORTAL_LOG, 'holerites: consulta employeeId', e.message || e);
+    console.error(PORTAL_LOG, 'holerites: consulta employeeId', e.message || e);
   }
 
   const mat = rhMatricula != null ? String(rhMatricula).trim() : '';
@@ -238,7 +237,7 @@ async function fetchHoleritesForEmployee(employeeId, rhMatricula) {
         const snapMat = await getDocs(qMat);
         addSnap(snapMat);
       } catch (e) {
-        console.warn(PORTAL_LOG, `holerites: consulta ${fields[i]}`, e.message || e);
+        console.error(PORTAL_LOG, `holerites: consulta ${fields[i]}`, e.message || e);
       }
     }
     if (/^\d+$/.test(mat)) {
@@ -249,14 +248,13 @@ async function fetchHoleritesForEmployee(employeeId, rhMatricula) {
           const snapNum = await getDocs(qNum);
           addSnap(snapNum);
         } catch (e) {
-          console.warn(PORTAL_LOG, `holerites: consulta ${fields[i]} (número)`, e.message || e);
+          console.error(PORTAL_LOG, `holerites: consulta ${fields[i]} (número)`, e.message || e);
         }
       }
     }
   }
 
   const list = [...merged.values()].sort((a, b) => holeriteSortTime(b) - holeriteSortTime(a));
-  console.log(PORTAL_LOG, 'holerites: carregados', { total: list.length, employeeId: String(employeeId) });
   return list;
 }
 
@@ -346,10 +344,9 @@ async function fetchDailyAttendanceStatusByDate(employeeId, year, monthIndex0) {
     });
     const out = new Map();
     byDate.forEach((v, k) => out.set(k, v.status));
-    console.log(PORTAL_LOG, 'daily_attendance: dias com registro', { total: out.size, employeeId: id, startStr, endStr });
     return out;
   } catch (e) {
-    console.warn(PORTAL_LOG, 'daily_attendance: consulta', e.message || e);
+    console.error(PORTAL_LOG, 'daily_attendance: consulta', e.message || e);
     return new Map();
   }
 }
@@ -579,7 +576,7 @@ function openHoleriteInBrowser(url) {
         URL.revokeObjectURL(objUrl);
       }
     } catch (e) {
-      console.warn(PORTAL_LOG, 'holerites: abrir PDF (data URL)', e);
+      console.error(PORTAL_LOG, 'holerites: abrir PDF (data URL)', e);
     }
     return;
   }
@@ -983,7 +980,6 @@ function renderDashboard(employee, teamInfo, userName, evaluations, holerites) {
 }
 
 async function loadAndShowDashboard(session) {
-  console.log(PORTAL_LOG, 'dashboard: carregando colaborador', { employeeId: session.employeeId, email: session.email });
   const emp = await fetchEmployee(session.employeeId);
   if (!emp) {
     console.error(PORTAL_LOG, 'dashboard: falha — colaborador não encontrado para employeeId=', session.employeeId);
@@ -993,7 +989,6 @@ async function loadAndShowDashboard(session) {
     showLoginError('Cadastro de colaborador não encontrado. Procure o RH.');
     return;
   }
-  console.log(PORTAL_LOG, 'dashboard: colaborador carregado com sucesso', { employeeId: emp.id, name: emp.name });
   const teamInfo = await resolveTeamLabel(emp);
   const [evaluations, holerites] = await Promise.all([
     fetchEvaluationsForEmployee(session.employeeId),
@@ -1012,22 +1007,11 @@ async function onLoginSubmit(e) {
   if (btn) { btn.disabled = true; }
 
   try {
-    console.log(PORTAL_LOG, 'login: buscando usuário por e-mail', { email: normEmail(email) });
     const user = await fetchUserByEmail(email);
     if (!user) {
-      console.warn(PORTAL_LOG, 'login: nenhum usuário encontrado na coleção users para este e-mail');
       showLoginError('E-mail ou senha inválidos.');
       return;
     }
-
-    console.log(PORTAL_LOG, 'login: usuário encontrado', {
-      docId: user.id,
-      email: user.email,
-      role: user.role,
-      active: user.active,
-      hasEmployeeId: !!user.employeeId,
-      employeeId: user.employeeId != null ? String(user.employeeId) : null
-    });
 
     if (user.active === false) {
       showLoginError('Usuário desativado. Fale com o administrador.');
@@ -1035,20 +1019,17 @@ async function onLoginSubmit(e) {
     }
 
     if (user.role !== 'employee') {
-      console.warn(PORTAL_LOG, 'login: recusado — role não é employee', { role: user.role });
       showLoginError('Este acesso é exclusivo para colaboradores (perfil employee).');
       return;
     }
 
     if (!passwordMatches(password, user.password)) {
-      console.warn(PORTAL_LOG, 'login: senha inválida ou ausente no documento');
       showLoginError('E-mail ou senha inválidos.');
       return;
     }
 
     const empIdTrim = user.employeeId != null ? String(user.employeeId).trim() : '';
     if (!empIdTrim) {
-      console.warn(PORTAL_LOG, 'login: recusado — employeeId ausente no documento users');
       showLoginError('Seu usuário ainda não está vinculado a um colaborador (employeeId). Fale com o RH.');
       return;
     }
@@ -1059,8 +1040,6 @@ async function onLoginSubmit(e) {
       name:       user.name || '',
       employeeId: empIdTrim
     });
-
-    console.log(PORTAL_LOG, 'login: sessão gravada; employeeId utilizado', empIdTrim);
     await loadAndShowDashboard(readSession());
   } catch (err) {
     console.error('[Portal]', err);
