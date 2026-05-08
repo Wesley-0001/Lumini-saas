@@ -4,7 +4,7 @@
 ============================================= */
 
 const DEMO_USERS = [
-  { email: 'admin@lumini',   password: 'Luminiadmin',       role: 'admin',      name: 'Wesley',  supervisor: null },
+  { email: 'admin@lumini.com', password: 'Luminiadmin',     role: 'admin',      name: 'Wesley',  supervisor: null },
   { email: 'admin2@lumini',  password: 'Luminiadmin2',      role: 'admin',      name: 'Gustavo', supervisor: null },
   { email: 'diretor@lumini', password: 'Luminidiretor',     role: 'boss',       name: 'Carlos',  supervisor: null },
   { email: 'gerente@lumini', password: 'Luminigerente',     role: 'manager',    name: 'Samuel',  supervisor: null },

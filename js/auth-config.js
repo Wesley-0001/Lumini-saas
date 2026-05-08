@@ -30,8 +30,9 @@
   // ─── Listas de papéis (env-like) ────────────────
   // Acesso macro / administrativo
   const ADMIN_EMAILS = [
-    'admin@lumini',
+    'admin@lumini.com',
     'admin2@lumini',
+    'lumini@admin',
     'wesley@lumini.com.br',
     'gustavo@lumini.com.br'
   ].map(lower);
@@ -72,8 +73,9 @@
   // Se um e-mail não estiver aqui, qualquer senha não-vazia é aceita
   // (modo "ambiente sem auth" — útil para testes locais e demo).
   const DEMO_PASSWORDS = {
-    'admin@lumini':    'Luminiadmin',
+    'admin@lumini.com': 'Luminiadmin',
     'admin2@lumini':   'Luminiadmin2',
+    'lumini@admin':    'Luminilumini',
     'diretor@lumini':  'Luminidiretor',
     'gerente@lumini':  'Luminigerente',
     'rh@lumini':       'Luminirh',

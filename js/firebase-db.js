@@ -6,6 +6,9 @@
    Firestore em nuvem (Google Firebase)
 ============================================= */
 
+// Cache/Service Worker: se estiver vendo `auth/api-key-not-valid`, faça um hard refresh (Ctrl+F5) e confirme se
+// não há Service Worker servindo uma versão antiga do site/config.
+
 // ─── SDK Firebase via CDN ───────────────────
 import { initializeApp }       from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import { getFirestore, enableIndexedDbPersistence, collection, doc, getDocs, getDoc, setDoc, deleteDoc, writeBatch, onSnapshot, query, where, updateDoc, addDoc, Timestamp }

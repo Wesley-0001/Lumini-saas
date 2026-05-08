@@ -17,8 +17,12 @@
 (function () {
   'use strict';
 
+  // Sanitização extrema: garante que não exista whitespace/quebras de linha/caracteres ocultos na apiKey.
+  // Evita casos onde a chave "parece" correta, mas foi colada com caracteres invisíveis.
+  const apiKey = String("AIzaSyAVB6QZCUE4fUyrFMh7Oex0rcNRLVP9uI").trim();
+
   window.firebaseConfig = {
-    apiKey:            "AIzaSyAVB6QZCUE4fUyrFMh7Oex0rcNRLVP9uI",
+    apiKey,
     authDomain:        "lumini-sabor-nt.firebaseapp.com",
     projectId:         "lumini-sabor-nt",
     storageBucket:     "lumini-sabor-nt.firebasestorage.app",

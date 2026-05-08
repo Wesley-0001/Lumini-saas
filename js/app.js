@@ -431,7 +431,7 @@ function _initFirebaseAuthGuard() {
     // Sem Firebase Auth carregado → não redireciona à força; evita "piscar".
     _ntSetAuthTransition(false);
     _authShowBody();
-    alert('Erro: Firebase Auth não carregou. Recarregue a página.');
+    console.error('[Auth] Firebase Auth não carregou. Verifique firebase-config e scripts da página.');
     return;
   }
 
@@ -480,7 +480,7 @@ function _initFirebaseAuthGuard() {
       if (user && _ntIsFirestorePermissionDenied(e)) {
         _ntSetAuthTransition(false);
         _authShowBody();
-        alert(`Erro de Permissão: Seu UID ${user.uid} não foi encontrado na coleção /users`);
+        console.error('[Auth] Permissão negada no Firestore: UID não encontrado em /users', user?.uid);
         return;
       }
       _authHardKickToLogin();
@@ -569,6 +569,7 @@ window.refreshCurrentPage = function() {
 // existentes (`e.supervisor === currentUser.email`). O e-mail real digitado
 // fica em `currentUser.loginEmail`.
 async function doLogin() {
+  console.log('[Auth] window.location.origin:', window.location.origin);
   const emailRaw = document.getElementById('login-email').value.trim();
   const pass     = document.getElementById('login-password')?.value?.trim?.() || '';
   const errEl    = document.getElementById('login-error');
@@ -771,7 +772,7 @@ function applyUserTheme() {
     'sup2@lumini':              'theme-sup2',
     'sup3@lumini':              'theme-sup1',
     'sup4@lumini':              'theme-sup2',
-    'admin@lumini':             'theme-admin',
+    'admin@lumini.com':         'theme-admin',
     'admin2@lumini':            'theme-admin',
     'gerente@lumini':           'theme-andre',
     'diretor@lumini':           'theme-carlos',
@@ -1523,7 +1524,7 @@ const RH_LIDER_TO_SUPERVISOR = {
   'Rogério': 'sup2@lumini',
   'Davi':    'sup1@lumini',
   'Carlos':  'diretor@lumini',
-  'Wesley':  'admin@lumini',
+  'Wesley':  'admin@lumini.com',
 };
 
 function _rhLiderToSupervisor(lider) {
