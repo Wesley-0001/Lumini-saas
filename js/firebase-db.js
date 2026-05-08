@@ -11,7 +11,24 @@
 
 // ─── SDK Firebase via CDN ───────────────────
 import { initializeApp }       from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-import { initializeFirestore, enableIndexedDbPersistence, collection, doc, getDocs, getDoc, setDoc, deleteDoc, writeBatch, onSnapshot, query, where, updateDoc, addDoc, Timestamp }
+import {
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
+  collection,
+  doc,
+  getDocs,
+  getDoc,
+  setDoc,
+  deleteDoc,
+  writeBatch,
+  onSnapshot,
+  query,
+  where,
+  updateDoc,
+  addDoc,
+  Timestamp
+}
   from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
 import {
   getAuth,
@@ -37,8 +54,11 @@ if (!firebaseConfig || !firebaseConfig.apiKey) {
 }
 
 const firebaseApp = initializeApp(firebaseConfig);
-// Force “single owning tab” to evitar `failed-precondition` em múltiplas abas.
-const db          = initializeFirestore(firebaseApp, { experimentalForceOwningTab: true });
+// Firestore offline cache (nova sintaxe): substitui enableIndexedDbPersistence().
+// Mantém compat com múltiplas abas via tab manager.
+const db          = initializeFirestore(firebaseApp, {
+  cache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+});
 const auth        = getAuth(firebaseApp);
 
 // ─── Persistência do Auth (IMPORTANTE) ─────────
@@ -519,16 +539,6 @@ window.resetFirebaseData = async function() {
 window.initFirebase = async function() {
   try {
     showLoadingScreen(true);
-
-    try {
-      await enableIndexedDbPersistence(db);
-    } catch (err) {
-      const code = err && err.code;
-      // Sem logs de aviso (mantemos apenas erros críticos no console).
-      if (code !== 'failed-precondition' && code !== 'unimplemented') {
-        console.error('[Firestore] Falha ao ativar persistência offline:', err && err.message ? err.message : err);
-      }
-    }
 
     await seedIfNeeded();
 

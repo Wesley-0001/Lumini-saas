@@ -39,160 +39,7 @@ function _initDarkToggle() {
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-// ⚠️ ⚠️ ⚠️ BLOCO TEMPORÁRIO — SEED DE USUÁRIOS NO FIREBASE ⚠️ ⚠️ ⚠️
-// ----------------------------------------------------------------------------
-// Função de uso ÚNICO para popular o Firebase Auth + Firestore a partir de
-// `window.DEMO_USERS` (definido em js/data.js). Cria a conta no Auth e grava
-// um documento em /users/{uid} com { email, name, role }.
-//
-// Como usar:
-//   1. Abrir login.html no navegador.
-//   2. Clicar no botão "🚀 Sincronizar Base de Dados" no topo da tela.
-//   3. Confirmar o popup e acompanhar o console.
-//   4. Verificar Firebase Console → Authentication e Firestore → users.
-//
-// 🚨 REMOVER APÓS O PRIMEIRO USO 🚨
-// Tanto este bloco quanto o botão em login.html devem ser apagados depois
-// que a base estiver populada. Manter este código em produção é um risco
-// (qualquer visitante poderia disparar o seed).
-// ════════════════════════════════════════════════════════════════════════════
-async function seedUsersToFirebase() {
-  const list = Array.isArray(window.DEMO_USERS) ? window.DEMO_USERS : [];
-  if (!list.length) {
-    alert('Nenhum usuário encontrado em DEMO_USERS.');
-    return;
-  }
-  if (!window.firebaseConfig || !window.firebaseConfig.apiKey) {
-    alert('firebaseConfig não disponível. Verifique js/firebase-config.js.');
-    return;
-  }
-  if (!confirm(
-    `Sincronizar ${list.length} usuário(s) com o Firebase?\n\n` +
-    `Usuários já existentes serão ignorados (auth/email-already-in-use).`
-  )) return;
-
-  const btn = document.getElementById('lumini-seed-btn');
-  if (btn) { btn.disabled = true; btn.textContent = '⏳ Sincronizando...'; }
-
-  let created = 0, skipped = 0, failed = 0;
-  try {
-    // Carrega SDK dinamicamente para não acoplar este código temporário ao
-    // módulo principal (firebase-db.js). Versão idêntica à usada lá.
-    const [appMod, authMod, fsMod] = await Promise.all([
-      import('https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js'),
-      import('https://www.gstatic.com/firebasejs/10.12.0/firebase-auth.js'),
-      import('https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js')
-    ]);
-
-    // App secundário evita afetar o listener onAuthStateChanged do app principal
-    // (createUserWithEmailAndPassword loga automaticamente o usuário recém-criado).
-    const SEED_APP_NAME = '__lumini_seed_app__';
-    const seedApp =
-      (appMod.getApps && appMod.getApps().find(a => a.name === SEED_APP_NAME)) ||
-      appMod.initializeApp(window.firebaseConfig, SEED_APP_NAME);
-    const seedAuth = authMod.getAuth(seedApp);
-    const seedDb   = fsMod.getFirestore(seedApp);
-
-    const UID_OVERRIDES = {
-      'admin@lumini.com': 'tSXsfZryn9hf33FS46khgiyyteF3',
-      // Mantém exatamente como você passou (mesmo truncado aqui no pedido).
-      'sup1@lumini.com': 'xKExEvw3OIMqey7nXfZZsxHP'
-    };
-
-    console.group('[Seed] Sincronização de usuários');
-    for (const u of list) {
-      const email    = String(u.email || '').trim();
-      const password = String(u.password || '');
-      const name     = String(u.name || '').trim();
-      const role     = String(u.role || 'employee').trim();
-
-      if (!email || !password) {
-        failed++;
-        console.error('[Seed] Registro inválido (email/senha vazios):', u);
-        continue;
-      }
-
-      try {
-        // “Vincular”, não apenas “criar”:
-        // 1) tenta criar
-        // 2) se já existir, faz sign-in para descobrir o UID real
-        let uid = '';
-        let wasCreated = false;
-        try {
-          const cred = await authMod.createUserWithEmailAndPassword(seedAuth, email, password);
-          uid = String(cred?.user?.uid || '');
-          wasCreated = true;
-        } catch (errCreate) {
-          const codeCreate = String(errCreate?.code || errCreate?.name || '');
-          if (codeCreate === 'auth/email-already-in-use') {
-            // Usa o password do DEMO_USERS para logar e pegar UID do Auth
-            const cred2 = await authMod.signInWithEmailAndPassword(seedAuth, email, password);
-            uid = String(cred2?.user?.uid || '');
-            try { await authMod.signOut(seedAuth); } catch (_) {}
-          } else {
-            throw errCreate;
-          }
-        }
-
-        if (!uid) {
-          failed++;
-          console.error(`✗ Falha em ${email}: UID vazio após create/sign-in.`);
-          continue;
-        }
-
-        // Grava em /users/{uid} — UID == docId é essencial para as Security Rules.
-        await fsMod.setDoc(fsMod.doc(seedDb, 'users', uid), { email, name, role }, { merge: true });
-
-        // UIDs fixos exigidos (admin/sup1): garante doc exatamente nesses IDs.
-        const emLower = String(email).toLowerCase();
-        const forcedUid = UID_OVERRIDES[emLower];
-        if (forcedUid) {
-          if (uid !== forcedUid) {
-            console.error(`[Seed][UID MISMATCH] ${email}: Auth retornou uid=${uid}, mas esperado=${forcedUid}. ` +
-                          `Não é possível “trocar” UID via client; confirme o UID no Firebase Auth.`);
-          }
-          await fsMod.setDoc(fsMod.doc(seedDb, 'users', forcedUid), { email, name, role }, { merge: true });
-        }
-
-        if (wasCreated) {
-          created++;
-          console.log(`✓ Criado: ${email}  →  uid=${uid}  role=${role}`);
-        } else {
-          skipped++;
-          console.warn(`• Vinculado (já existia no Auth): ${email}  →  uid=${uid}  role=${role}`);
-        }
-      } catch (err) {
-        const code = String(err?.code || err?.name || '');
-        failed++;
-        console.error(`✗ Falha em ${email} [${code}]:`, err?.message || err);
-      }
-    }
-    console.groupEnd();
-
-    // Logout do app secundário (boa higiene; o app principal não foi tocado).
-    try { await authMod.signOut(seedAuth); } catch (_) {}
-  } catch (err) {
-    console.error('[Seed] Erro fatal ao carregar SDK ou inicializar app secundário:', err);
-    alert('Erro ao iniciar o seed. Veja o console (F12).');
-    if (btn) { btn.disabled = false; btn.textContent = '🚀 Sincronizar Base de Dados'; }
-    return;
-  }
-
-  const summary =
-    `Seed concluído.\n\n` +
-    `✓ Criados: ${created}\n` +
-    `• Ignorados (já existiam): ${skipped}\n` +
-    `✗ Falhas: ${failed}\n\n` +
-    `Confira o console do navegador e o Firebase Console.`;
-  console.log(summary);
-  alert(summary);
-
-  if (btn) { btn.disabled = false; btn.textContent = '✅ Sincronização concluída'; }
-}
-window.seedUsersToFirebase = seedUsersToFirebase;
-// ════════════════════════════════════════════════════════════════════════════
-// ⚠️ FIM DO BLOCO TEMPORÁRIO — REMOVER APÓS O SEED ⚠️
-// ════════════════════════════════════════════════════════════════════════════
+// (Bloco de seed/sincronização removido para produção)
 
 // ─── STATE ──────────────────────────────────
 let currentUser = null;
@@ -227,11 +74,8 @@ window.luminiWarn = function() {};
 try {
   const cfg = window.firebaseConfig;
   if (!cfg || !cfg.apiKey) {
-    console.error('[Lumini] firebaseConfig ausente no boot do app.js. ' +
-                  'Verifique se js/firebase-config.js é carregado ANTES de js/app.js.');
   }
 } catch (e) {
-  console.error('[Lumini] Falha ao ler window.firebaseConfig:', e);
 }
 
 // ─── GLOBAL ERROR INTERCEPTOR (Offline + Permission Denied) ─────
@@ -318,7 +162,6 @@ function _ntInitGlobalErrorInterceptor() {
     if (isFirebasePermissionDenied(err)) {
       try {
         const who = window.currentUser ? { role: window.currentUser.role, email: window.currentUser.loginEmail || window.currentUser.email } : null;
-        console.error('[SECURITY] Permission denied:', { page: window.currentPage, who, err: { code: err.code, message: err.message } });
       } catch (_) {}
       showBanner('Acesso negado: você não tem permissão para ver estes dados.', 'warn');
       return;
@@ -493,6 +336,23 @@ function _authHardKickToLogin() {
   window.__ntShouldRedirectToLogin = true;
 }
 
+// ─── Debug rápido: imprime config Firebase em uso ─────────────────────────
+function debugFirebaseConfig() {
+  try {
+    const cfg = window.firebaseConfig || null;
+    const apiKey = cfg && cfg.apiKey != null ? String(cfg.apiKey) : '(undefined)';
+    const authDomain = cfg && cfg.authDomain != null ? String(cfg.authDomain) : '(undefined)';
+    console.log('[Firebase Config] apiKey:', apiKey);
+    console.log('[Firebase Config] authDomain:', authDomain);
+    return { apiKey, authDomain };
+  } catch (_) {
+    console.log('[Firebase Config] apiKey: (unavailable)');
+    console.log('[Firebase Config] authDomain: (unavailable)');
+    return { apiKey: '(unavailable)', authDomain: '(unavailable)' };
+  }
+}
+window.debugFirebaseConfig = debugFirebaseConfig;
+
 function _readCpUser() {
   try {
     const raw = sessionStorage.getItem('cp_user');
@@ -588,30 +448,34 @@ async function _ensureBasicUserInSession(firebaseUser) {
 }
 
 function _initFirebaseAuthGuard() {
-  // Bypass de diagnóstico: modo offline forçado (somente teste)
-  // Permite navegar no app UI mesmo sem Firebase Auth válido.
-  try {
-    const forced = String(localStorage.getItem('LUMINI_FORCE_OFFLINE') || '').trim();
-    if (forced === '1' || forced.toLowerCase() === 'true') {
-      const isLogin = _authIsLoginPage();
-      if (isLogin) {
-        // Se entrou aqui via login, pula direto pro app.
-        window.location.replace('app.html');
-        return;
-      }
-      const sess = _readCpUser();
-      if (sess && typeof sess === 'object') {
-        currentUser = sess;
-        _authShowBody();
-        _ntSetAuthTransition(false);
-        startApp();
-        return;
-      }
-    }
-  } catch (_) {}
-
   _authHideBody();
   _ntSetAuthTransition(true);
+
+  // ── BYPASS DE EMERGÊNCIA (modo demonstração) ──
+  // Se o Firebase/Auth estiver bloqueado (ex.: apiKey), permite entrar com um
+  // usuário fake armazenado em sessionStorage.
+  const demoMode = (() => {
+    try { return sessionStorage.getItem('lumini_demo_mode') === '1'; } catch (_) { return false; }
+  })();
+  if (demoMode) {
+    const isLogin = _authIsLoginPage();
+    const fromSession = _readCpUser();
+    currentUser = _hasBasicSessionUser(fromSession)
+      ? fromSession
+      : { email: 'admin@lumini.com', loginEmail: 'admin@lumini.com', name: 'Demonstração', role: 'admin' };
+
+    _ntSetAuthTransition(false);
+    _authShowBody();
+
+    // Login: manda para o app; App: inicia direto sem Firebase.
+    const onAppOnly = document.getElementById('app') && !document.getElementById('page-login');
+    if (isLogin) {
+      window.location.replace('app.html');
+      return;
+    }
+    if (onAppOnly) startApp();
+    return;
+  }
 
   const auth = window._fbAuth;
   const onAuth = window._fbOnAuthStateChanged;
@@ -623,7 +487,6 @@ function _initFirebaseAuthGuard() {
     // Sem Firebase Auth carregado → não redireciona à força; evita "piscar".
     _ntSetAuthTransition(false);
     _authShowBody();
-    console.error('[Auth] Firebase Auth não carregou. Verifique firebase-config e scripts da página.');
     return;
   }
 
@@ -670,7 +533,6 @@ function _initFirebaseAuthGuard() {
       if (user && _ntIsFirestorePermissionDenied(e)) {
         _ntSetAuthTransition(false);
         _authShowBody();
-        console.error('[Auth] Permissão negada no Firestore: UID não encontrado em /users', user?.uid);
         return;
       }
       _authHardKickToLogin();
@@ -759,7 +621,8 @@ window.refreshCurrentPage = function() {
 // existentes (`e.supervisor === currentUser.email`). O e-mail real digitado
 // fica em `currentUser.loginEmail`.
 async function doLogin() {
-  const emailRaw = document.getElementById('login-email').value.trim();
+  const emailInput = document.getElementById('login-email');
+  const emailRaw = String(emailInput?.value || '').trim();
   const pass     = document.getElementById('login-password')?.value?.trim?.() || '';
   const errEl    = document.getElementById('login-error');
 
@@ -772,12 +635,13 @@ async function doLogin() {
 
   const cfg = window.LUMINI_AUTH_CONFIG;
   if (!cfg || typeof cfg.resolveAuthForEmail !== 'function') {
-    console.error('[Lumini] auth-config.js não carregado.');
     showError('Erro de configuração — recarregue a página.');
     return;
   }
 
-  const email = String(emailRaw || '').toLowerCase();
+  const email = String(emailRaw || '').trim().toLowerCase();
+  // Garante que o campo reflita exatamente o valor que vai para o Firebase Auth.
+  if (emailInput && email && emailInput.value !== email) emailInput.value = email;
 
   // 1) Validação de formato
   if (!email || !cfg.isValidEmail(email)) {
@@ -839,48 +703,35 @@ async function doLogin() {
     _persistSessionExtras(user);
     window.location.replace('app.html');
   } catch (error) {
-    console.error('ERRO NO MOMENTO DO LOGIN:', error?.code || error, error?.message || '');
-    console.error('[Auth] login falhou (raw):', error);
     const code = String(error?.code || '').toLowerCase();
-    if (code === 'auth/api-key-not-valid') {
-      // Log detalhado: qual domínio está em jogo
-      try {
-        const cfg = window.firebaseConfig || {};
-        console.group('[Auth][api-key-not-valid] Diagnóstico de domínio');
-        console.error('location.href:', String(location.href));
-        console.error('location.origin:', String(location.origin));
-        console.error('location.host:', String(location.host));
-        console.error('location.hostname:', String(location.hostname));
-        console.error('location.protocol:', String(location.protocol));
-        console.error('firebaseConfig.projectId:', cfg.projectId);
-        console.error('firebaseConfig.authDomain:', cfg.authDomain);
-        console.error('firebaseConfig.apiKey(prefix):', (cfg.apiKey ? String(cfg.apiKey).slice(0, 6) + '…' : '(missing)'));
-        console.groupEnd();
-        if (location.protocol === 'file:') {
-          console.error('[Auth] Página servida via file:// — Firebase Auth não funciona nesse protocolo.');
-        }
-      } catch (_) {}
+    const message = String(error?.message || '');
+    const isApiKeyErr = (code === 'auth/api-key-not-valid' || code === 'auth/invalid-api-key');
+    const is400BadRequest = /(^|[\s:])400([\s:]|$)/i.test(message) || /bad request/i.test(message);
 
-      // Modo Offline forçado (somente teste) — não depende do Firebase.
-      try {
-        const doOffline = confirm(
-          'Erro auth/api-key-not-valid.\n\n' +
-          'Ativar MODO OFFLINE (somente teste) para liberar a UI e diagnosticar?\n' +
-          '(Isso ignora Firebase Auth até você desligar a flag.)'
-        );
-        if (doOffline) {
-          try { localStorage.setItem('LUMINI_FORCE_OFFLINE', '1'); } catch (_) {}
-          currentUser = user;
-          sessionStorage.setItem('cp_user', JSON.stringify(user));
-          _persistSessionExtras(user);
-          window.location.replace('app.html');
-          return;
-        }
-      } catch (_) {}
+    if (isApiKeyErr || is400BadRequest) {
+      debugFirebaseConfig();
+      console.log('Aguardando liberação da API Key no Google Cloud Console');
 
-      showError('Erro de configuração do Firebase (API key inválida/restrita). Veja o console (F12) para domínio/config e, se necessário, ative Modo Offline (teste).');
+      const ok = confirm('Erro de API detectado. Deseja entrar no modo de demonstração?');
+      if (ok) {
+        try { sessionStorage.setItem('lumini_demo_mode', '1'); } catch (_) {}
+        currentUser = user;
+        try { sessionStorage.setItem('cp_user', JSON.stringify(user)); } catch (_) {}
+        _persistSessionExtras(user);
+        window.location.replace('app.html');
+        return;
+      }
+      showError('Erro de API detectado. Tente novamente mais tarde.');
     } else if (code === 'auth/network-request-failed') {
       showError('Falha de rede ao conectar no Firebase. Verifique sua internet e tente novamente.');
+    } else if (code === 'auth/wrong-password' || code === 'auth/invalid-credential') {
+      showError('Senha incorreta.');
+    } else if (code === 'auth/user-not-found') {
+      showError('Usuário não encontrado para este e-mail.');
+    } else if (code === 'auth/invalid-email') {
+      showError('E-mail inválido.');
+    } else if (code === 'auth/too-many-requests') {
+      showError('Muitas tentativas. Aguarde um pouco e tente novamente.');
     } else {
       showError('E-mail ou senha incorretos.');
     }
@@ -1336,7 +1187,6 @@ async function _getTodayAttendanceMapForTeam(teamId) {
     _todayAttendanceCache.recordsByEmpId = map;
     return map;
   } catch (e) {
-    console.error('[Lumini] Falha ao buscar frequência de hoje:', e && e.message ? e.message : e);
     return null;
   }
 }
@@ -4423,7 +4273,6 @@ function checkSystemHealth() {
   try { cfg = window.firebaseConfig || null; } catch (_) { cfg = null; }
   const apiKey = cfg && cfg.apiKey != null ? String(cfg.apiKey).trim() : '';
   if (!apiKey) {
-    console.error('[HealthCheck] API Key ausente em window.firebaseConfig.');
     _ntShowMaintenanceBanner();
     return { ok: false, reason: 'missing_api_key' };
   }
@@ -4441,7 +4290,6 @@ function checkSystemHealth() {
       const stillNoAuth = !window._fbAuth;
       const stillNoInit = typeof window.initFirebase !== 'function';
       if (stillNoAuth && stillNoInit) {
-        console.error('[HealthCheck] Firebase não parece ter inicializado (auth/init ausentes).');
         _ntShowMaintenanceBanner();
       }
     }, 1500);
