@@ -6,9 +6,6 @@
    Firestore em nuvem (Google Firebase)
 ============================================= */
 
-// Cache/Service Worker: se estiver vendo `auth/api-key-not-valid`, faça um hard refresh (Ctrl+F5) e confirme se
-// não há Service Worker servindo uma versão antiga do site/config.
-
 // ─── SDK Firebase via CDN ───────────────────
 import { initializeApp }       from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
 import {
@@ -54,12 +51,14 @@ if (!firebaseConfig || !firebaseConfig.apiKey) {
 }
 
 const firebaseApp = initializeApp(firebaseConfig);
-// Firestore offline cache (nova sintaxe): substitui enableIndexedDbPersistence().
-// Mantém compat com múltiplas abas via tab manager.
 const db          = initializeFirestore(firebaseApp, {
-  cache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
 });
 const auth        = getAuth(firebaseApp);
+
+console.warn(
+  'Sistema operando em modo resiliente. Se o login real falhar, verifique as restrições da API Key no Google Cloud Console.'
+);
 
 // ─── Persistência do Auth (IMPORTANTE) ─────────
 // Garante que o login sobreviva ao refresh e evita "sessão fantasma" por SESSION/NONE.
@@ -505,42 +504,10 @@ async function persistCollection(name, arr) {
   }
 }
 
-// ─── Apaga e re-insere uma coleção inteira ───
-async function wipeAndSeed(name, data) {
-  try {
-    const snap  = await getDocs(collection(db, name));
-    const batch = writeBatch(db);
-    snap.docs.forEach(d => batch.delete(d.ref));
-    await batch.commit();
-    if (data.length > 0) await persistCollection(name, data);
-  } catch(e) {
-    console.error(`[Firebase] Erro ao resetar ${name}:`, e);
-  }
-}
-
-// ─── Seed automático (desativado) ────────────
-async function seedIfNeeded() {
-}
-
-// ─── Reset manual (console do browser) ───────
-window.resetFirebaseData = async function() {
-  if (!confirm('⚠️ Isso vai APAGAR TODOS os dados no Firebase! Confirma?')) return;
-  showLoadingScreen(true);
-  await wipeAndSeed('employees',   []);
-  await wipeAndSeed('evaluations', []);
-  await wipeAndSeed('excecoes',    []);
-  await wipeAndSeed('teams',       []);
-  // Recria carreiras
-  await wipeAndSeed('careers', window.DEMO_CAREERS || []);
-  setTimeout(() => location.reload(), 1500);
-};
-
 // ─── BOOT: carrega tudo e inicializa app ─────
 window.initFirebase = async function() {
   try {
     showLoadingScreen(true);
-
-    await seedIfNeeded();
 
     // Carrega tudo para o cache
     let [emps, cars, evals, excs, tms, purs, sups, prods, usrs] = await Promise.all([

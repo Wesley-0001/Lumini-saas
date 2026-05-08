@@ -462,7 +462,7 @@ function _initFirebaseAuthGuard() {
     const fromSession = _readCpUser();
     currentUser = _hasBasicSessionUser(fromSession)
       ? fromSession
-      : { email: 'admin@lumini.com', loginEmail: 'admin@lumini.com', name: 'Demonstração', role: 'admin' };
+      : { email: 'admin@lumini.com', loginEmail: 'admin@lumini.com', name: 'Administrador', role: 'admin' };
 
     _ntSetAuthTransition(false);
     _authShowBody();
@@ -705,23 +705,54 @@ async function doLogin() {
   } catch (error) {
     const code = String(error?.code || '').toLowerCase();
     const message = String(error?.message || '');
-    const isApiKeyErr = (code === 'auth/api-key-not-valid' || code === 'auth/invalid-api-key');
-    const is400BadRequest = /(^|[\s:])400([\s:]|$)/i.test(message) || /bad request/i.test(message);
+    const statusCode = Number(error?.customData?.statusCode ?? error?.status);
+    const isApiKeyErr =
+      code === 'auth/api-key-not-valid' ||
+      code === 'auth/invalid-api-key';
+    const isHttp400 =
+      statusCode === 400 ||
+      /(^|[\s:])400([\s:]|$)/i.test(message) ||
+      /bad request/i.test(message);
+    // Evita oferecer modo demo para falhas normais de senha/usuário (também HTTP 400).
+    const isCredentialAuthFailure = [
+      'auth/wrong-password',
+      'auth/invalid-credential',
+      'auth/user-not-found',
+      'auth/invalid-email',
+      'auth/user-disabled',
+      'auth/missing-password',
+      'auth/too-many-requests'
+    ].includes(code);
 
-    if (isApiKeyErr || is400BadRequest) {
-      debugFirebaseConfig();
-      console.log('Aguardando liberação da API Key no Google Cloud Console');
+    const isDemoRecoverable = isApiKeyErr || (isHttp400 && !isCredentialAuthFailure);
 
-      const ok = confirm('Erro de API detectado. Deseja entrar no modo de demonstração?');
+    if (isDemoRecoverable) {
+      const ok = confirm(
+        'Erro de conexão com o Google. Deseja entrar no modo de demonstração?'
+      );
       if (ok) {
         try { sessionStorage.setItem('lumini_demo_mode', '1'); } catch (_) {}
-        currentUser = user;
-        try { sessionStorage.setItem('cp_user', JSON.stringify(user)); } catch (_) {}
-        _persistSessionExtras(user);
+        const adminResolved = cfg.resolveAuthForEmail('admin@lumini.com');
+        const demoAdmin = adminResolved
+          ? {
+              email: adminResolved.email,
+              loginEmail: adminResolved.email,
+              name: adminResolved.name,
+              role: 'admin'
+            }
+          : {
+              email: 'admin@lumini.com',
+              loginEmail: 'admin@lumini.com',
+              name: 'Administrador',
+              role: 'admin'
+            };
+        currentUser = demoAdmin;
+        try { sessionStorage.setItem('cp_user', JSON.stringify(demoAdmin)); } catch (_) {}
+        _persistSessionExtras(demoAdmin);
         window.location.replace('app.html');
         return;
       }
-      showError('Erro de API detectado. Tente novamente mais tarde.');
+      showError('Não foi possível conectar. Tente novamente mais tarde.');
     } else if (code === 'auth/network-request-failed') {
       showError('Falha de rede ao conectar no Firebase. Verifique sua internet e tente novamente.');
     } else if (code === 'auth/wrong-password' || code === 'auth/invalid-credential') {
