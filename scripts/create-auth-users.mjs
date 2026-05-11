@@ -27,13 +27,33 @@ const USERS = [
   { email: 'gustavo.exp@lumini.com', password: 'Lumini@GExp'    }
 ];
 
+/** Alinha papéis aos e-mails seed (local antes de @). */
+function resolveRole(email) {
+  const local = String(email || '').split('@')[0].toLowerCase();
+  if (local === 'gustavo.exp') return 'supervisor';
+  if (/^sup[1-4]$/.test(local)) return 'supervisor';
+  if (local === 'rh' || local === 'rh2') return 'rh';
+  if (local === 'diretor' || local === 'carlos') return 'boss';
+  if (local === 'gerente' || local === 'samuel') return 'manager';
+  if (local.startsWith('admin') || local === 'lumini' || local === 'wesley' || local === 'gustavo') {
+    return 'admin';
+  }
+  return 'supervisor';
+}
+
 let criados = 0;
 let existiam = 0;
 let falhas = 0;
 
 for (const u of USERS) {
   try {
-    await admin.auth().createUser({ email: u.email, password: u.password });
+    const userRecord = await admin.auth().createUser({ email: u.email, password: u.password });
+    await admin.firestore().collection('users').doc(userRecord.uid).set({
+      email: u.email,
+      name: u.email,
+      role: resolveRole(u.email),
+      createdAt: new Date()
+    });
     console.log(`✅ Criado: ${u.email}`);
     criados++;
   } catch (e) {

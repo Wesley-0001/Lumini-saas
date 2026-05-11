@@ -20,6 +20,24 @@
     { value: 'atestado',         label: 'Atestado' }
   ];
 
+  /**
+   * Slot interno da matriz de assiduidade → classe CSS única (`status-*`) na célula.
+   * Mantém um único mapeamento para evitar divergência com a legenda.
+   */
+  function _assiduitySlotToStatusClass(slot) {
+    switch (String(slot || '')) {
+      case 'presente': return 'status-presente';
+      case 'falta': return 'status-falta';
+      case 'just': return 'status-justificada';
+      case 'folga': return 'status-folga';
+      case 'turno_cancelado': return 'status-cancelado';
+      case 'future': return 'status-futuro';
+      case 'neu':
+      case 'empty':
+      default: return 'status-sem-registro';
+    }
+  }
+
   const ABSENCE_HIGHLIGHT_THRESHOLD = 3; // faltas a partir desta quantidade marcam o dia no calendário
 
   // ────────── Estado em memória ──────────
@@ -53,7 +71,8 @@
   /** Edição destravada (Admin/Gerente após "Retificar") */
   let _editUnlocked = false;
 
-  /** Equipe selecionada por Admin/Gerente */
+  /** Equipe selecionada por Admin/Gerente (`__ALL__` = todas as equipes no Resumo Geral). */
+  const DA_ALL_TEAMS = '__ALL__';
   let _selectedTeamId = null;
 
   /** Perspectiva: diário vs consolidado */
@@ -88,10 +107,74 @@
     return `${String(teamId || '').trim()}__${y}-${_pad2(m0 + 1)}`;
   }
 
+  /** "YYYY-MM" para queries Firestore (`month_year`). */
+  function _monthYearStr(y, m0) {
+    if (y == null || m0 == null) return '';
+    return `${y}-${_pad2(m0 + 1)}`;
+  }
+
+  function _updateMonthStepperLabel() {
+    const el = document.getElementById('da-month-step-label');
+    if (!el || _calViewYear == null || _calViewMonth0 == null) return;
+    const t = _ptMonthYearTitle(_calViewYear, _calViewMonth0);
+    el.textContent = t;
+  }
+
+  /** Mantém o dia selecionado dentro do mês visível (Visão Diária). */
+  function _clampCalSelectedToViewMonth() {
+    if (_calSelected == null || _calViewYear == null || _calViewMonth0 == null) return;
+    const d = new Date(String(_calSelected) + 'T12:00:00');
+    if (d.getFullYear() === _calViewYear && d.getMonth() === _calViewMonth0) return;
+    const last = new Date(_calViewYear, _calViewMonth0 + 1, 0).getDate();
+    const day = Math.min(Math.max(1, d.getDate()), last);
+    _calSelected = `${_calViewYear}-${_pad2(_calViewMonth0 + 1)}-${_pad2(day)}`;
+    _syncSelectedToInput();
+  }
+
+  function _renderAssiduitySkeleton(nRows, nDays) {
+    const assMount = document.getElementById('da-assiduity-table-mount');
+    if (!assMount) return;
+    const nR = Math.max(3, Math.min(Number(nRows) || 6, 14));
+    const nD = Math.max(28, Math.min(Number(nDays) || 31, 31));
+    const headDays = Array.from({ length: nD }, (_, i) =>
+      `<th scope="col" class="da-assid-th-day da-assid-th-day--skel">${i + 1}</th>`
+    ).join('');
+    const rows = Array.from({ length: nR }, () => `
+      <tr class="da-assid-tr">
+        <th scope="row" class="da-assid-th-name">
+          <span class="nt-skel nt-skel-line" style="display:block;width:min(180px,42vw);height:12px;border-radius:6px"></span>
+        </th>
+        ${Array.from({ length: nD }, () =>
+          `<td class="da-assid-td-cell"><span class="nt-skel da-assid-skel-square" aria-hidden="true"></span></td>`
+        ).join('')}
+      </tr>
+    `).join('');
+    assMount.innerHTML = `
+      <table class="da-assiduity-table da-assiduity-table--skel" role="presentation" aria-busy="true">
+        <thead>
+          <tr>
+            <th scope="col" class="da-assid-th-name da-assid-th-corner">Colaborador</th>
+            ${headDays}
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
+    `;
+  }
+
   function _safeText(s) {
     return String(s == null ? '' : s)
       .replace(/&/g, '&amp;').replace(/</g, '&lt;')
       .replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  }
+
+  /** Atributo HTML (ex.: title) — evita quebra de aspas e entidades básicas. */
+  function _safeAttr(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;')
+      .replace(/\n/g, ' ');
   }
 
   function _isFutureDate(dateStr) {
@@ -318,11 +401,35 @@
   }
 
   // ────────── Equipe & contexto ──────────
+  /** Escopo do Resumo Geral consolidado: todas as equipes ou chave do supervisor. */
+  function _consolidatedScopeTeamId() {
+    if (_isSupervisor()) {
+      return _supervisorTeamKeyForCurrentUser();
+    }
+    if (_isAdminOrManager()) {
+      const v = _selectedTeamId != null ? String(_selectedTeamId).trim() : '';
+      if (!v || v === DA_ALL_TEAMS) return DA_ALL_TEAMS;
+      return v;
+    }
+    return '';
+  }
+
   function _activeTeamId() {
     if (_isSupervisor()) {
       return _supervisorTeamKeyForCurrentUser();
     }
-    return _selectedTeamId ? String(_selectedTeamId).trim() : '';
+    const v = _selectedTeamId != null ? String(_selectedTeamId).trim() : '';
+    if (!v || v === DA_ALL_TEAMS) return '';
+    return v;
+  }
+
+  function _employeesForConsolidated(scopeTeamId) {
+    if (scopeTeamId === DA_ALL_TEAMS) {
+      return _allEmployees()
+        .slice()
+        .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'pt-BR'));
+    }
+    return _getTeamFor(scopeTeamId);
   }
 
   function _getTeamFor(teamId) {
@@ -456,6 +563,7 @@
       const presentes = sum ? (Number(sum.presentes) || 0) : 0;
       const faltas = sum ? (Number(sum.faltas) || 0) : 0;
       const atestados = sum ? (Number(sum.atestados) || 0) : 0;
+      const folgas = sum ? (Number(sum.folgas) || 0) : 0;
       const denom = presentes + faltas;
       const perf = denom > 0 ? (presentes / denom) : null;
       const isLow = perf != null && perf < 0.8;
@@ -468,7 +576,7 @@
         : [];
       cells.push({
         iso, day: d.getDate(), inMonth, isSelected, isToday, hasDot, isLow,
-        showHighAbsence, hasAdminEdits, sum, topAbs, atestados
+        showHighAbsence, hasAdminEdits, sum, topAbs, atestados, folgas
       });
     }
 
@@ -492,6 +600,7 @@
               presentes: Number(c.sum.presentes) || 0,
               faltas: Number(c.sum.faltas) || 0,
               atestados: Number(c.atestados) || 0,
+              folgas: Number(c.folgas) || 0,
               top: (c.topAbs || []).map(x => x.name),
               hasAdminEdits: !!c.hasAdminEdits
             }))
@@ -508,6 +617,7 @@
         `;
       })
       .join('');
+    _updateMonthStepperLabel();
   }
 
   // ────────── Sincronização de seleção ──────────
@@ -556,6 +666,11 @@
 
   function _applyPerspective() {
     const dailyOn = _perspective === 'daily';
+    const toolbar = document.getElementById('da-toolbar');
+    if (toolbar) {
+      toolbar.classList.toggle('da-toolbar--consolidated', !dailyOn);
+      toolbar.classList.toggle('da-toolbar--daily', dailyOn);
+    }
     const hint = document.getElementById('da-doc-hint');
     if (hint) hint.style.display = dailyOn ? '' : 'none';
 
@@ -606,6 +721,71 @@
     if (wrap) wrap.classList.toggle('is-readonly', !!readonly);
   }
 
+  /** Visão diária: barra "Ações em massa" (só `pending`); não persiste no Firestore. */
+  function _updateBulkActionsBar() {
+    const row = document.getElementById('da-mark-all-row');
+    if (!row) return;
+    if (_perspective !== 'daily') {
+      row.hidden = true;
+      return;
+    }
+    const tbody = document.getElementById('da-attendance-tbody');
+    const editWrap = document.getElementById('da-edit-wrap');
+    if (!tbody || !editWrap || editWrap.hidden) {
+      row.hidden = true;
+      return;
+    }
+    const editable = Array.from(tbody.querySelectorAll('select.da-status-select')).filter(s => !s.disabled);
+    if (!editable.length) {
+      row.hidden = true;
+      return;
+    }
+    row.hidden = false;
+    const hasPending = editable.some(s => s.value === 'pending');
+    ['da-bulk-presente', 'da-bulk-folga', 'da-bulk-cancelado'].forEach(id => {
+      const b = document.getElementById(id);
+      if (b) b.disabled = !hasPending;
+    });
+  }
+
+  /**
+   * Ações em massa na lista do dia: altera apenas selects em "Não definido" (`pending`).
+   * Dispara `change` para manter `_state`, chips "alterado" e `_renderExecSummary` alinhados.
+   * Não persiste no Firestore até "Salvar frequência do dia".
+   *
+   * @param {string} statusValue Um de: `presente` | `folga` | `turno_cancelado`
+   */
+  function bulkApplyStatus(statusValue) {
+    const st = String(statusValue || '').trim().toLowerCase();
+    if (st !== 'presente' && st !== 'folga' && st !== 'turno_cancelado') return;
+    if (st === 'folga') {
+      if (!window.confirm('Deseja marcar folga para toda a equipe? Somente colaboradores em "Não definido" serão alterados.')) return;
+    }
+    if (st === 'turno_cancelado') {
+      if (!window.confirm('Deseja marcar turno cancelado para toda a equipe? Somente colaboradores em "Não definido" serão alterados.')) return;
+    }
+    const tbody = document.getElementById('da-attendance-tbody');
+    if (!tbody || !_state) return;
+    const FLASH_CLASS = 'da-status-select--flash';
+    const FLASH_MS = 1100;
+    tbody.querySelectorAll('select.da-status-select').forEach(sel => {
+      if (sel.disabled) return;
+      if (sel.value !== 'pending') return;
+      sel.value = st;
+      sel.dispatchEvent(new Event('change', { bubbles: true }));
+      if (sel._daFlashTid) clearTimeout(sel._daFlashTid);
+      sel.classList.remove(FLASH_CLASS);
+      // eslint-disable-next-line no-unused-expressions
+      sel.offsetWidth;
+      sel.classList.add(FLASH_CLASS);
+      sel._daFlashTid = setTimeout(() => {
+        sel.classList.remove(FLASH_CLASS);
+        sel._daFlashTid = null;
+      }, FLASH_MS);
+    });
+    _updateBulkActionsBar();
+  }
+
   // ────────── Resumo executivo (substitui mensagens vazias) ──────────
   function _renderExecSummary() {
     if (!_state) {
@@ -614,17 +794,21 @@
     }
     const ds = _state.dateStr;
     const rows = _state.rows || [];
-    let presentes = 0, faltas = 0, atestados = 0;
+    let presentes = 0, faltas = 0, atestados = 0, folgas = 0, cancelados = 0;
     rows.forEach(r => {
       const st = String(r.status || '').toLowerCase();
       if (st === 'presente') presentes += 1;
       else if (st === 'falta') faltas += 1;
       else if (st === 'atestado') atestados += 1;
+      else if (st === 'folga') folgas += 1;
+      else if (st === 'turno_cancelado') cancelados += 1;
     });
 
     const pres = document.getElementById('da-exec-presencas');
     const flt = document.getElementById('da-exec-faltas');
     const at = document.getElementById('da-exec-atestados');
+    const fg = document.getElementById('da-exec-folgas');
+    const canc = document.getElementById('da-exec-cancelados');
     const sub = document.getElementById('da-exec-sub');
     const badgeCons = document.getElementById('da-badge-consolidated');
     const badgeAud = document.getElementById('da-badge-audit');
@@ -632,6 +816,8 @@
     if (pres) pres.textContent = String(presentes);
     if (flt) flt.textContent = String(faltas);
     if (at) at.textContent = String(atestados);
+    if (fg) fg.textContent = String(folgas);
+    if (canc) canc.textContent = String(cancelados);
 
     const team = _getTeamFor(_activeTeamId());
     const total = team.length || rows.length || 0;
@@ -673,6 +859,7 @@
     const arr = Array.isArray(rows) ? rows : [];
     let presentes = 0, faltas = 0, atestados = 0;
     const faltantes = [];
+    // Performance do dia: só presença × falta. Folga, turno cancelado e atestado não entram como falta.
     for (const r of arr) {
       const st = String(r && r.status ? r.status : '').trim().toLowerCase();
       if (st === 'presente') presentes += 1;
@@ -750,92 +937,96 @@
 
   // ────────── Mode resolver (regras de negócio) ──────────
   function _setModeForDate() {
-    if (!_state) return;
-    if (_perspective === 'consolidated') {
-      _applyPerspective();
-      return;
-    }
-    const ds = _state.dateStr;
-    const hasData = !!_state.docExists;
-    const isFuture = _isFutureDate(ds);
-    const isPast = _isPastDate(ds);
+    try {
+      if (!_state) return;
+      if (_perspective === 'consolidated') {
+        _applyPerspective();
+        return;
+      }
+      const ds = _state.dateStr;
+      const hasData = !!_state.docExists;
+      const isFuture = _isFutureDate(ds);
+      const isPast = _isPastDate(ds);
 
-    const saveBtn = document.getElementById('da-save-btn');
-    const exportBtn = document.getElementById('da-export-btn');
-    const editBtn = document.getElementById('da-edit-btn');         // legado (escondido)
-    const rectifyBtn = document.getElementById('da-rectify-btn');   // novo (Admin/Gerente)
-    const cancelBtn = document.getElementById('da-cancel-edit-btn');
+      const saveBtn = document.getElementById('da-save-btn');
+      const exportBtn = document.getElementById('da-export-btn');
+      const editBtn = document.getElementById('da-edit-btn');         // legado (escondido)
+      const rectifyBtn = document.getElementById('da-rectify-btn');   // novo (Admin/Gerente)
+      const cancelBtn = document.getElementById('da-cancel-edit-btn');
 
-    const isSup = _isSupervisor();
-    const isAdmMng = _isAdminOrManager();
+      const isSup = _isSupervisor();
+      const isAdmMng = _isAdminOrManager();
 
-    // ▸ Estado: dia FUTURO
-    if (isFuture) {
-      _setFutureVisible(true);
-      _renderFutureEmpty(ds);
-      _setEditVisible(false);
-      _setExecSummaryVisible(false);
-      if (saveBtn) saveBtn.disabled = true;
-      if (exportBtn) exportBtn.disabled = true;
+      // ▸ Estado: dia FUTURO
+      if (isFuture) {
+        _setFutureVisible(true);
+        _renderFutureEmpty(ds);
+        _setEditVisible(false);
+        _setExecSummaryVisible(false);
+        if (saveBtn) saveBtn.disabled = true;
+        if (exportBtn) exportBtn.disabled = true;
+        if (rectifyBtn) rectifyBtn.hidden = true;
+        if (editBtn) editBtn.hidden = true;
+        if (cancelBtn) cancelBtn.hidden = true;
+        return;
+      }
+
+      // ▸ Estado: SUPERVISOR + dia com registro → READ-ONLY total
+      if (isSup && hasData && !_editUnlocked) {
+        _setDashboardVisible(true);
+        _renderDashboardFromState();
+        _setEditVisible(true);
+        _setEditControlsForReadonly(true);
+
+        if (saveBtn) saveBtn.hidden = true;             // 🔒 oculta "Salvar"
+        if (cancelBtn) cancelBtn.hidden = true;         // 🔒 oculta "Cancelar"
+        if (exportBtn) { exportBtn.hidden = false; exportBtn.disabled = false; }
+        if (rectifyBtn) rectifyBtn.hidden = true;       // só admin/gerente vê
+        if (editBtn) editBtn.hidden = true;             // legado oculto
+
+        _renderExecSummary();
+        return;
+      }
+
+      // ▸ Estado: ADMIN/GERENTE + dia com registro → readonly inicial + botão "Retificar"
+      if (isAdmMng && hasData && !_editUnlocked) {
+        _setDashboardVisible(true);
+        _renderDashboardFromState();
+        _setEditVisible(true);
+        _setEditControlsForReadonly(true);
+
+        if (saveBtn) { saveBtn.hidden = true; saveBtn.disabled = true; }
+        if (cancelBtn) cancelBtn.hidden = true;
+        if (exportBtn) { exportBtn.hidden = false; exportBtn.disabled = false; }
+        if (rectifyBtn) rectifyBtn.hidden = false;
+        if (editBtn) editBtn.hidden = true;
+
+        _renderExecSummary();
+        return;
+      }
+
+      // ▸ Estado: edição liberada
+      //   - hoje
+      //   - passado sem dados (todos os papéis)
+      //   - admin/gerente após "Retificar"
+      _setDashboardVisible(false);
+      _setFutureVisible(false);
+      _setEditVisible(true);
+      _setEditControlsForReadonly(false);
+
+      if (saveBtn) { saveBtn.hidden = false; saveBtn.disabled = false; }
+      if (exportBtn) { exportBtn.hidden = true; exportBtn.disabled = true; }
       if (rectifyBtn) rectifyBtn.hidden = true;
       if (editBtn) editBtn.hidden = true;
-      if (cancelBtn) cancelBtn.hidden = true;
-      return;
-    }
 
-    // ▸ Estado: SUPERVISOR + dia com registro → READ-ONLY total
-    if (isSup && hasData && !_editUnlocked) {
-      _setDashboardVisible(true);
-      _renderDashboardFromState();
-      _setEditVisible(true);
-      _setEditControlsForReadonly(true);
+      // Cancelar: visível quando há registro existente e estamos editando
+      if (cancelBtn) cancelBtn.hidden = !(hasData && (isPast || isAdmMng));
 
-      if (saveBtn) saveBtn.hidden = true;             // 🔒 oculta "Salvar"
-      if (cancelBtn) cancelBtn.hidden = true;         // 🔒 oculta "Cancelar"
-      if (exportBtn) { exportBtn.hidden = false; exportBtn.disabled = false; }
-      if (rectifyBtn) rectifyBtn.hidden = true;       // só admin/gerente vê
-      if (editBtn) editBtn.hidden = true;             // legado oculto
-
+      // Resumo executivo continua visível enquanto houver registro
       _renderExecSummary();
-      return;
+    } finally {
+      _updateBulkActionsBar();
     }
-
-    // ▸ Estado: ADMIN/GERENTE + dia com registro → readonly inicial + botão "Retificar"
-    if (isAdmMng && hasData && !_editUnlocked) {
-      _setDashboardVisible(true);
-      _renderDashboardFromState();
-      _setEditVisible(true);
-      _setEditControlsForReadonly(true);
-
-      if (saveBtn) { saveBtn.hidden = true; saveBtn.disabled = true; }
-      if (cancelBtn) cancelBtn.hidden = true;
-      if (exportBtn) { exportBtn.hidden = false; exportBtn.disabled = false; }
-      if (rectifyBtn) rectifyBtn.hidden = false;
-      if (editBtn) editBtn.hidden = true;
-
-      _renderExecSummary();
-      return;
-    }
-
-    // ▸ Estado: edição liberada
-    //   - hoje
-    //   - passado sem dados (todos os papéis)
-    //   - admin/gerente após "Retificar"
-    _setDashboardVisible(false);
-    _setFutureVisible(false);
-    _setEditVisible(true);
-    _setEditControlsForReadonly(false);
-
-    if (saveBtn) { saveBtn.hidden = false; saveBtn.disabled = false; }
-    if (exportBtn) { exportBtn.hidden = true; exportBtn.disabled = true; }
-    if (rectifyBtn) rectifyBtn.hidden = true;
-    if (editBtn) editBtn.hidden = true;
-
-    // Cancelar: visível quando há registro existente e estamos editando
-    if (cancelBtn) cancelBtn.hidden = !(hasData && (isPast || isAdmMng));
-
-    // Resumo executivo continua visível enquanto houver registro
-    _renderExecSummary();
   }
 
   // ────────── CSV ──────────
@@ -963,6 +1154,7 @@
             <div><span class="da-pop-dot da-pop-dot--ok"></span> Presentes <strong>${Number(data.presentes) || 0}</strong></div>
             <div><span class="da-pop-dot da-pop-dot--bad"></span> Faltas <strong>${Number(data.faltas) || 0}</strong></div>
             <div><span class="da-pop-dot da-pop-dot--info"></span> Atestados <strong>${Number(data.atestados) || 0}</strong></div>
+            <div><span class="da-pop-dot da-pop-dot--folga"></span> Folgas <strong>${Number(data.folgas) || 0}</strong></div>
           </div>
           <div class="da-pop-sub">Top 3 faltantes</div>
           <div class="da-pop-top">${top.length ? top.map(n => `<div class="da-pop-top-row">${_safeText(n)}</div>`).join('') : '<div class="da-pop-top-empty">Sem faltas.</div>'}</div>
@@ -1020,7 +1212,9 @@
         employeeId: empId,
         name: e.name || '—',
         cargo,
-        status: String(prev.status || 'pending'),
+        status: (typeof window._ntNormAttendanceStatus === 'function'
+          ? window._ntNormAttendanceStatus(prev.status)
+          : String(prev.status || 'pending')),
         createdBy: prev.createdBy,
         createdRole: prev.createdRole,
         updatedBy: prev.updatedBy,
@@ -1187,6 +1381,7 @@
             _renderExecSummary(); // recomputa contadores ao vivo
           }
         }
+        _updateBulkActionsBar();
       });
     });
   }
@@ -1290,25 +1485,48 @@
     const sel = document.getElementById('da-team-select');
     if (!wrap || !sel) return;
 
+    if (_isSupervisor()) {
+      wrap.hidden = false;
+      sel.removeAttribute('disabled');
+      const key = _supervisorTeamKeyForCurrentUser();
+      const label = key ? _leaderLabelForTeamKey(key) : 'Sua equipe';
+      sel.innerHTML = `<option value="${_safeText(key)}">${_safeText(label || key || '—')}</option>`;
+      sel.value = key || '';
+      sel.disabled = true;
+      sel.setAttribute('aria-disabled', 'true');
+      sel.title = 'Você visualiza apenas os dados da sua equipe.';
+      _selectedTeamId = key || null;
+      return;
+    }
+
     if (!_isAdminOrManager()) {
       wrap.hidden = true;
       return;
     }
     wrap.hidden = false;
+    sel.removeAttribute('disabled');
+    sel.removeAttribute('aria-disabled');
+    sel.removeAttribute('title');
 
     const leaders = _uniqueLeadersFromEmployees();
-    const opts = ['<option value="">Selecione um líder (supervisor)…</option>'].concat(
+    const opts = [`<option value="${DA_ALL_TEAMS}">-- Todas as Equipes --</option>`].concat(
       leaders.map(L => `<option value="${_safeText(L.key)}">${_safeText(L.label)}</option>`)
     );
     sel.innerHTML = opts.join('');
-    if (_selectedTeamId && leaders.some(L => L.key === _selectedTeamId)) {
+
+    const validKeys = new Set([DA_ALL_TEAMS, ...leaders.map(L => L.key)]);
+    if (_selectedTeamId && validKeys.has(_selectedTeamId)) {
       sel.value = _selectedTeamId;
+    } else {
+      sel.value = DA_ALL_TEAMS;
+      _selectedTeamId = DA_ALL_TEAMS;
     }
 
     if (!sel._daBound) {
       sel._daBound = true;
       sel.addEventListener('change', () => {
-        _selectedTeamId = sel.value || null;
+        const v = String(sel.value || '').trim();
+        _selectedTeamId = v || DA_ALL_TEAMS;
         _monthDotsCache.clear();
         _monthSummaryCache.clear();
         _consCache.clear();
@@ -1317,7 +1535,7 @@
         const ds = _calSelected || _todayISO();
         _loadFromFirestore(ds);
         if (_perspective === 'consolidated') {
-          requestAnimationFrame(() => _renderConsolidatedForCurrentMonth({ force: false }));
+          requestAnimationFrame(() => _renderConsolidatedForCurrentMonth({ force: true }));
         }
       });
     }
@@ -1329,7 +1547,7 @@
     if (_isSupervisor()) {
       sub.textContent = 'Lançamento diário da sua equipe — após salvar, o dia fica consolidado.';
     } else if (_isAdminOrManager()) {
-      sub.textContent = 'Auditoria e retificação de frequência — selecione uma equipe para começar.';
+      sub.textContent = 'Auditoria e retificação de frequência — no Resumo Geral use o filtro de equipe; na visão diária, escolha um supervisor para lançar.';
     } else {
       sub.textContent = 'Lançamento diário por colaborador — um documento por dia e equipe.';
     }
@@ -1347,13 +1565,30 @@
     return `${_monthKey(teamId, y, m0)}__shift=${shift || 'all'}`;
   }
 
-  async function _fetchConsolidatedMonthDocs(teamId, y, m0) {
+  async function _fetchConsolidatedMonthDocs(scopeTeamId, y, m0) {
     const { startDate, endDate } = _monthStartEnd(y, m0);
+    const monthYear = _monthYearStr(y, m0);
+    if (typeof window._ntListDailyAttendanceDocsForDashboard === 'function') {
+      const supervisorId = scopeTeamId === DA_ALL_TEAMS ? '' : String(scopeTeamId || '').trim();
+      return await window._ntListDailyAttendanceDocsForDashboard({
+        monthYear,
+        startDate,
+        endDate,
+        supervisorId
+      });
+    }
     if (typeof window._ntListAttendanceDocsForTeam !== 'function') {
       throw new Error('Serviço indisponível: _ntListAttendanceDocsForTeam');
     }
-    const data = await window._ntListAttendanceDocsForTeam({ teamId, startDate, endDate });
-    return data;
+    if (scopeTeamId === DA_ALL_TEAMS) {
+      throw new Error('Serviço indisponível: _ntListDailyAttendanceDocsForDashboard');
+    }
+    return await window._ntListAttendanceDocsForTeam({
+      teamId: scopeTeamId,
+      startDate,
+      endDate,
+      monthYear
+    });
   }
 
   function _computeConsolidatedPayload(teamEmployees, docs, y, m0, shift) {
@@ -1383,17 +1618,34 @@
 
     const daysInMonth = new Date(y, m0 + 1, 0).getDate();
     const dayLabels = Array.from({ length: daysInMonth }, (_, i) => String(i + 1));
+    const dayDates = Array.from({ length: daysInMonth }, (_, i) =>
+      `${y}-${_pad2(m0 + 1)}-${_pad2(i + 1)}`);
 
     // aggregations
     const agg = {};
     for (const e of filteredTeam) {
-      agg[String(e.id)] = { id: String(e.id), name: e.name || '—', pres: 0, falt: 0, cancel: 0, just: 0, totalKnown: 0, faltDates: [] };
+      agg[String(e.id)] = {
+        id: String(e.id),
+        name: e.name || '—',
+        pres: 0,
+        falt: 0,
+        cancel: 0,
+        just: 0,
+        folgas: 0,
+        totalKnown: 0,
+        faltDates: []
+      };
     }
 
-    // heatmap matrix: empId -> dayIndex -> status ('ok'|'bad'|'neu')
-    const hm = {};
+    /** Células da tabela de assiduidade: por colaborador e dia do mês (cruzamento employee_id × date do doc). */
+    const hmCells = {};
     Object.keys(agg).forEach(id => {
-      hm[id] = Array.from({ length: daysInMonth }, () => 'neu');
+      hmCells[id] = dayDates.map(ds => ({
+        dateStr: ds,
+        slot: 'empty',
+        label: 'Sem registro',
+        justificativa: ''
+      }));
     });
 
     for (const doc of (Array.isArray(docs) ? docs : [])) {
@@ -1413,18 +1665,64 @@
         }
         if (!empId || !ids.has(empId)) continue;
         if (!agg[empId]) continue;
-        const st0 = String(r.status || '').trim().toLowerCase();
         const st =
-          st0 === 'p' ? 'presente' :
-          st0 === 'f' ? 'falta' :
-          (st0 === 'presenca' || st0 === 'presença') ? 'presente' :
-          st0;
-        if (st === 'presente') { agg[empId].pres += 1; agg[empId].totalKnown += 1; if (dayIdx >= 0) hm[empId][dayIdx] = 'ok'; }
-        else if (st === 'falta') { agg[empId].falt += 1; agg[empId].totalKnown += 1; agg[empId].faltDates.push(dateStr); if (dayIdx >= 0) hm[empId][dayIdx] = 'bad'; }
-        else if (st === 'turno_cancelado') { agg[empId].cancel += 1; agg[empId].totalKnown += 1; if (dayIdx >= 0) hm[empId][dayIdx] = 'bad'; }
-        else if (st === 'atestado' || st === 'folga') { agg[empId].just += 1; agg[empId].totalKnown += 1; }
+          typeof window._ntNormAttendanceStatus === 'function'
+            ? window._ntNormAttendanceStatus(r.status)
+            : String(r.status || '').trim().toLowerCase();
+
+        const justTxt = String(r.justificativa || r.justification || r.notes || r.note || '').trim();
+
+        const paintCell = (slot, label, justificativa) => {
+          if (dayIdx < 0 || !hmCells[empId] || !hmCells[empId][dayIdx]) return;
+          const j = String(justificativa || '').trim();
+          const prevJ = String(hmCells[empId][dayIdx].justificativa || '').trim();
+          hmCells[empId][dayIdx] = {
+            dateStr: dayDates[dayIdx],
+            slot,
+            label,
+            justificativa: j || prevJ
+          };
+        };
+
+        if (st === 'presente') {
+          agg[empId].pres += 1;
+          agg[empId].totalKnown += 1;
+          paintCell('presente', 'Presença confirmada', justTxt);
+        } else if (st === 'falta') {
+          agg[empId].falt += 1;
+          agg[empId].totalKnown += 1;
+          agg[empId].faltDates.push(dateStr);
+          paintCell('falta', 'Falta', justTxt);
+        } else if (st === 'turno_cancelado') {
+          agg[empId].cancel += 1;
+          agg[empId].totalKnown += 1;
+          paintCell('turno_cancelado', 'Turno cancelado', justTxt);
+        } else if (st === 'atestado') {
+          agg[empId].just += 1;
+          agg[empId].totalKnown += 1;
+          paintCell('just', 'Justificada (atestado)', justTxt);
+        } else if (st === 'folga') {
+          agg[empId].folgas += 1;
+          agg[empId].totalKnown += 1;
+          paintCell('folga', 'Folga', justTxt);
+        }
       }
     }
+
+    const todayIso = _todayISO();
+    Object.keys(hmCells).forEach(empId => {
+      hmCells[empId].forEach((cell, i) => {
+        if (cell.slot !== 'empty') return;
+        const ds = cell.dateStr || dayDates[i];
+        if (ds && ds > todayIso) {
+          cell.slot = 'future';
+          cell.label = 'Dia futuro (sem lançamento)';
+        } else {
+          cell.slot = 'neu';
+          cell.label = 'Sem registro';
+        }
+      });
+    });
 
     const rows = Object.values(agg);
     rows.forEach(r => r.faltDates.sort());
@@ -1435,6 +1733,7 @@
     const totalCancel = rows.reduce((s, r) => s + r.cancel, 0);
 
     // Aproveitamento real: ((ativos * dias úteis) - faltas) / (ativos * dias úteis)
+    // (Folgas, atestados e turnos cancelados não entram como falta — não reduzem este %.)
     // Ativos: colaboradores sem data de demissão no CSV (fallback) ou sem rhDemissao.
     const workdays = (() => {
       const start = new Date(y, m0, 1);
@@ -1462,7 +1761,7 @@
       employees: filteredTeam,
       ranked,
       kpis: { totalFaltas, totalPres, totalCancel, aproveitamento },
-      heatmap: { dayLabels, hm, nameById }
+      assiduityTable: { dayLabels, dayDates, hmCells }
     };
   }
 
@@ -1476,11 +1775,17 @@
     const cancelCard = document.querySelector('.da-kpi-card--cancel');
     const count = document.getElementById('da-cons-count');
     const tbody = document.getElementById('da-cons-tbody');
-    const hmWrap = document.getElementById('da-heatmap-wrap');
+    const assMount = document.getElementById('da-assiduity-table-mount');
+    const assHint = document.getElementById('da-assiduity-period-hint');
 
     const periodTitle = _ptMonthYearTitle(payload.y, payload.m0);
     if (title) title.textContent = `${periodTitle} — ${_shiftLabel(payload.shift)}`;
-    if (sub) sub.textContent = `Equipe: ${_safeText(_leaderLabelForTeamKey(teamId))} • Colaboradores: ${payload.ranked.length}`;
+    if (sub) {
+      const teamLabel = teamId === DA_ALL_TEAMS
+        ? 'Todas as equipes'
+        : _leaderLabelForTeamKey(teamId);
+      sub.textContent = `Equipe: ${_safeText(teamLabel)} • Colaboradores: ${payload.ranked.length}`;
+    }
 
     if (kF) kF.textContent = String(payload.kpis.totalFaltas || 0);
     if (kP) kP.textContent = String(payload.kpis.totalPres || 0);
@@ -1493,7 +1798,7 @@
 
     if (tbody) {
       if (!payload.ranked.length) {
-        tbody.innerHTML = `<tr><td colspan="6" class="empty-cell"><i class="fas fa-circle-info"></i> Nenhum colaborador no filtro selecionado.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="7" class="empty-cell"><i class="fas fa-circle-info"></i> Nenhum colaborador no filtro selecionado.</td></tr>`;
       } else {
         tbody.innerHTML = payload.ranked.map(r => {
           const denom = (r.pres + r.falt);
@@ -1506,6 +1811,7 @@
               <td><strong>${_safeText(r.name)}</strong></td>
               <td>${r.falt}</td>
               <td>${r.pres}</td>
+              <td>${r.folgas}</td>
               <td>${r.just}</td>
               <td>
                 <div class="da-cons-progress" title="${pct}%">
@@ -1519,27 +1825,53 @@
       }
     }
 
-    if (hmWrap) {
-      const { dayLabels, hm } = payload.heatmap;
-      const headRow = [
-        `<div class="da-hm-head" style="text-align:left">Colaborador</div>`,
-        ...dayLabels.map(d => `<div class="da-hm-head">${_safeText(d)}</div>`)
-      ].join('');
+    if (assHint) {
+      assHint.textContent = `${periodTitle} • ${_shiftLabel(payload.shift)}`;
+    }
 
-      const body = payload.ranked.map(r => {
-        const cells = (hm[String(r.id)] || []).map(code => {
-          const cls = code === 'ok' ? 'ok' : code === 'bad' ? 'bad' : 'neu';
-          return `<div class="da-hm-cell ${cls}"></div>`;
+    if (assMount && payload.assiduityTable) {
+      const { dayLabels, dayDates, hmCells } = payload.assiduityTable;
+      if (!payload.ranked.length) {
+        assMount.innerHTML = `<div class="empty-cell" style="padding:20px;text-align:center;opacity:.85"><i class="fas fa-circle-info"></i> Nenhum colaborador no filtro selecionado.</div>`;
+      } else {
+      const headDays = dayLabels.map((d, i) =>
+        `<th scope="col" class="da-assid-th-day" title="${_safeAttr(dayDates[i] || '')}">${_safeText(d)}</th>`
+      ).join('');
+
+      const bodyRows = payload.ranked.map(r => {
+        const rowCells = (hmCells[String(r.id)] || []).map((cell, i) => {
+          const slot = cell && cell.slot ? cell.slot : 'neu';
+          const statusCls = _assiduitySlotToStatusClass(slot);
+          const dateStr = (cell && cell.dateStr) || dayDates[i] || '';
+          const nice = _prettyDateLongPt(dateStr);
+          const statusLine = (cell && cell.label) ? String(cell.label) : '—';
+          const just = (cell && cell.justificativa) ? String(cell.justificativa) : '';
+          const aria = `${nice} — ${statusLine}${just ? ` — ${just}` : ''}`;
+          return `<td class="da-assid-td-cell"><span class="da-assid-cell-sq ${statusCls}"
+            role="img"
+            aria-label="${_safeAttr(aria)}"
+            data-da-date="${_safeAttr(dateStr)}"
+            data-da-status="${_safeAttr(statusLine)}"
+            data-da-just="${_safeAttr(just)}"></span></td>`;
         }).join('');
-        return `<div class="da-hm-name">${_safeText(r.name)}</div>${cells}`;
+        return `<tr class="da-assid-tr">
+          <th scope="row" class="da-assid-th-name">${_safeText(r.name)}</th>
+          ${rowCells}
+        </tr>`;
       }).join('');
 
-      hmWrap.innerHTML = `
-        <div class="da-heatmap-grid" style="grid-template-columns: 240px repeat(${dayLabels.length}, 14px);">
-          ${headRow}
-          ${body}
-        </div>
+      assMount.innerHTML = `
+        <table class="da-assiduity-table" role="grid" aria-label="Frequência mensal por colaborador">
+          <thead>
+            <tr>
+              <th scope="col" class="da-assid-th-name da-assid-th-corner">Colaborador</th>
+              ${headDays}
+            </tr>
+          </thead>
+          <tbody>${bodyRows}</tbody>
+        </table>
       `;
+      }
     }
   }
 
@@ -1552,7 +1884,7 @@
 
     const periodTitle = _ptMonthYearTitle(payload.y, payload.m0);
     ttl.textContent = emp.name || '—';
-    sub.textContent = `${periodTitle} • Faltas: ${emp.falt} • Turnos cancelados: ${emp.cancel}`;
+    sub.textContent = `${periodTitle} • Faltas: ${emp.falt} • Folgas: ${emp.folgas || 0} • Turnos cancelados: ${emp.cancel}`;
 
     const dates = (emp.faltDates || []).slice();
     if (!dates.length) {
@@ -1563,7 +1895,7 @@
           ${dates.map(ds => `
             <div class="da-modal-item">
               <div><strong>${_safeText(_prettyDateLongPt(ds))}</strong><div style="font-size:12px;opacity:.78">Clique para abrir e retificar o dia</div></div>
-              <button type="button" class="btn-outline" data-da-open-day="${_safeText(ds)}">
+              <button type="button" class="btn-outline" data-da-open-day="${_safeText(ds)}" data-da-context-emp-id="${_safeText(emp.id)}">
                 <i class="fas fa-pen-ruler"></i> Retificar
               </button>
             </div>
@@ -1586,55 +1918,121 @@
   }
 
   async function _renderConsolidatedForCurrentMonth(opts = { force: false }) {
-    const teamId = _activeTeamId();
+    const scopeTeamId = _consolidatedScopeTeamId();
     const y = _calViewYear;
     const m0 = _calViewMonth0;
     const shift = _shiftFilter || 'all';
 
-    if (!teamId || y == null || m0 == null) return;
+    if (!scopeTeamId || y == null || m0 == null) return;
 
     const cons = document.getElementById('da-consolidated');
     const tbody = document.getElementById('da-cons-tbody');
     if (!cons || !tbody) return;
 
-    const key = _consKey(teamId, y, m0, shift);
+    const key = _consKey(scopeTeamId, y, m0, shift);
     const cached = _consCache.get(key);
     if (!opts.force && cached && cached.payload) {
-      _renderConsolidatedUi(cached.payload, teamId);
+      _renderConsolidatedUi(cached.payload, scopeTeamId);
       return;
     }
 
-    tbody.innerHTML = `<tr><td colspan="6" class="empty-cell"><i class="fas fa-spinner fa-spin"></i> Carregando colaboradores…</td></tr>`;
+    const lastDay = new Date(y, m0 + 1, 0).getDate();
+    const previewTeam = _employeesForConsolidated(scopeTeamId);
+    const skelRows = Math.max(4, Math.min(previewTeam.length || 8, 12));
+
+    tbody.innerHTML = `<tr><td colspan="7" class="empty-cell"><i class="fas fa-spinner fa-spin"></i> Carregando colaboradores…</td></tr>`;
+    _renderAssiduitySkeleton(skelRows, lastDay);
     try {
       // garante fonte primária de colaboradores (CSV) antes de calcular/renderizar
       await _ensureEmployeesFromCsvLoaded();
-      const teamEmployees = _getTeamFor(teamId);
-      tbody.innerHTML = `<tr><td colspan="6" class="empty-cell"><i class="fas fa-spinner fa-spin"></i> Calculando resumo…</td></tr>`;
+      const teamEmployees = _employeesForConsolidated(scopeTeamId);
+      tbody.innerHTML = `<tr><td colspan="7" class="empty-cell"><i class="fas fa-spinner fa-spin"></i> Calculando resumo…</td></tr>`;
+      _renderAssiduitySkeleton(Math.max(4, Math.min(teamEmployees.length || 8, 12)), lastDay);
 
       let docs = [];
       try {
-        docs = await _fetchConsolidatedMonthDocs(teamId, y, m0);
+        docs = await _fetchConsolidatedMonthDocs(scopeTeamId, y, m0);
       } catch (e) {
         // Se o banco falhar, seguimos com docs vazios e renderizamos o período mesmo assim.
         docs = [];
       }
 
       const payload = _computeConsolidatedPayload(teamEmployees, docs, y, m0, shift);
-      _consCache.set(key, { teamId, y, m0, shift, computedAt: Date.now(), payload });
-      _renderConsolidatedUi(payload, teamId);
+      _consCache.set(key, { teamId: scopeTeamId, y, m0, shift, computedAt: Date.now(), payload });
+      _renderConsolidatedUi(payload, scopeTeamId);
     } catch (e) {
       console.error('[daily-attendance consolidated]', e);
       // Fallback final: tenta ao menos montar a UI com CSV (sem registros)
       try {
         await _ensureEmployeesFromCsvLoaded();
-        const teamEmployees = _getTeamFor(teamId);
+        const teamEmployees = _employeesForConsolidated(scopeTeamId);
         const payload = _computeConsolidatedPayload(teamEmployees, [], y, m0, shift);
-        _consCache.set(key, { teamId, y, m0, shift, computedAt: Date.now(), payload });
-        _renderConsolidatedUi(payload, teamId);
+        _consCache.set(key, { teamId: scopeTeamId, y, m0, shift, computedAt: Date.now(), payload });
+        _renderConsolidatedUi(payload, scopeTeamId);
       } catch {
-        tbody.innerHTML = `<tr><td colspan="6" class="empty-cell"><i class="fas fa-spinner fa-spin"></i> Carregando…</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="7" class="empty-cell"><i class="fas fa-spinner fa-spin"></i> Carregando…</td></tr>`;
       }
     }
+  }
+
+  function _bindMonthStepper() {
+    const prev = document.getElementById('da-month-prev');
+    const next = document.getElementById('da-month-next');
+    if (!prev || prev._daMonthBound) return;
+    prev._daMonthBound = true;
+
+    const bump = (delta) => {
+      _shiftViewMonth(delta);
+      _monthDotsCache.clear();
+      _monthSummaryCache.clear();
+      _consCache.clear();
+      if (_perspective === 'daily') {
+        _clampCalSelectedToViewMonth();
+        void _renderCalendar().then(() => {
+          if (_calSelected) _loadFromFirestore(_calSelected);
+        });
+      } else {
+        void _renderCalendar().then(() => {
+          requestAnimationFrame(() => _renderConsolidatedForCurrentMonth({ force: true }));
+        });
+      }
+    };
+
+    prev.addEventListener('click', () => bump(-1));
+    next.addEventListener('click', () => bump(1));
+  }
+
+  function _ensureAssiduityFlytipBound() {
+    const page = document.getElementById('page-supervisor-team-attendance');
+    if (!page || page._daFlytipBound) return;
+    page._daFlytipBound = true;
+
+    page.addEventListener('mousemove', (ev) => {
+      const tip = document.getElementById('da-assid-flytip');
+      if (!tip) return;
+      const ss = ev.target && ev.target.closest && ev.target.closest('.da-assid-cell-sq[data-da-date]');
+      if (!ss || !page.contains(ss)) {
+        tip.hidden = true;
+        return;
+      }
+      const ds = ss.getAttribute('data-da-date') || '';
+      const st = ss.getAttribute('data-da-status') || '';
+      const j = ss.getAttribute('data-da-just') || '';
+      let head = '';
+      if (ds) {
+        try { head = _prettyDateLongPt(ds); } catch { head = ds; }
+      }
+      const parts = [head, st, j].filter(Boolean);
+      tip.textContent = parts.join(' — ') || '—';
+      tip.hidden = false;
+      tip.style.left = `${Math.min(window.innerWidth - 280, ev.clientX + 14)}px`;
+      tip.style.top = `${Math.min(window.innerHeight - 56, ev.clientY + 14)}px`;
+    });
+
+    page.addEventListener('mouseleave', () => {
+      const tip = document.getElementById('da-assid-flytip');
+      if (tip) tip.hidden = true;
+    });
   }
 
   function _ensurePerspectiveToggleBound() {
@@ -1682,7 +2080,7 @@
         const tr = e.target.closest('[data-da-emp]');
         if (!tr) return;
         const empId = tr.getAttribute('data-da-emp');
-        const teamId = _activeTeamId();
+        const teamId = _consolidatedScopeTeamId();
         const y = _calViewYear, m0 = _calViewMonth0;
         const shift = _shiftFilter || 'all';
         const key = _consKey(teamId, y, m0, shift);
@@ -1704,6 +2102,15 @@
         const openDay = e.target.closest('[data-da-open-day]');
         if (openDay) {
           const ds = openDay.getAttribute('data-da-open-day');
+          if (_consolidatedScopeTeamId() === DA_ALL_TEAMS && _isAdminOrManager()) {
+            const empId = openDay.getAttribute('data-da-context-emp-id');
+            const hit = (empId && _allEmployees().find(x => String(x.id) === String(empId))) || null;
+            const tk = hit ? _normLeader(hit.supervisor || hit.rhLider || '') : '';
+            if (tk) {
+              _selectedTeamId = tk;
+              _renderTeamPicker();
+            }
+          }
           _closeEmpModal();
           _perspective = 'daily';
           dailyBtn.classList.add('active');
@@ -1739,6 +2146,10 @@
     // Reset de estado quando o usuário mudou de papel/contexto
     if (_isSupervisor()) {
       _selectedTeamId = _supervisorTeamKeyForCurrentUser();
+    } else if (_isAdminOrManager()) {
+      if (_selectedTeamId == null || String(_selectedTeamId).trim() === '') {
+        _selectedTeamId = DA_ALL_TEAMS;
+      }
     }
 
     _renderPageSubLabel();
@@ -1758,6 +2169,8 @@
 
     _renderCalendarSkeleton();
     _ensureCalendarDelegates();
+    _bindMonthStepper();
+    _ensureAssiduityFlytipBound();
     _ensureResultLayerButtonsBound();
     _ensurePerspectiveToggleBound();
 
@@ -1773,6 +2186,7 @@
       _syncSelectedToInput();
     }
     _renderCalendar();
+    _updateMonthStepperLabel();
     _loadFromFirestore(initial);
     _applyPerspective();
     if (_perspective === 'consolidated') {
@@ -1783,6 +2197,17 @@
     if (saveBtn && !saveBtn._daBound) {
       saveBtn._daBound = true;
       saveBtn.addEventListener('click', () => _save());
+    }
+
+    const bulkRow = document.getElementById('da-mark-all-row');
+    if (bulkRow && !bulkRow._daBulkBound) {
+      bulkRow._daBulkBound = true;
+      bulkRow.addEventListener('click', (ev) => {
+        const t = ev.target && ev.target.closest ? ev.target.closest('[data-da-bulk]') : null;
+        if (!t || bulkRow.contains(t) === false) return;
+        const v = t.getAttribute('data-da-bulk');
+        if (v) bulkApplyStatus(v);
+      });
     }
   };
 })();

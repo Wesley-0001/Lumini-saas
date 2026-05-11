@@ -16,6 +16,25 @@ let chartHRAdmDemiss   = null;
 let chartHRAge         = null;
 let chartHRTurnMonthly = null;
 
+/** Eixos / legenda dos gráficos RH alinhados ao tema (usa tokens CSS via app.js). */
+function _rhChartUi() {
+  const p = typeof window._ntChartPalette === 'function' ? window._ntChartPalette() : null;
+  const dark = document.body.classList.contains('dark-mode');
+  return {
+    tick: p ? p.axisTick : (dark ? '#94a3b8' : '#64748b'),
+    grid: p ? p.grid : (dark ? 'rgba(255,255,255,0.07)' : 'rgba(15,23,42,0.08)'),
+    leg: p ? p.legendText : (dark ? '#c5cdd8' : '#475569'),
+    tooltipBg: p ? p.tooltipBg : '#1e293b',
+    tooltipBody: p ? p.tooltipBody : '#f1f5f9',
+    donutBorder: p ? p.donutBorder : (dark ? '#23272e' : '#ffffff'),
+  };
+}
+
+document.addEventListener('lumini-theme-changed', () => {
+  const charts = [chartHRAdmDemiss, chartHRPie, chartHRTurnMonthly, chartHRAge, chartHRTurnover].filter(Boolean);
+  charts.forEach((c) => { if (window._ntApplyChartTheme) window._ntApplyChartTheme(c); });
+});
+
 // ─── Expõe funções de render no window ───────
 // (chamadas pelo navigateTo no app.js via window._rhRender*)
 window._rhRenderDashboard  = function() { renderRHDashboard(); };
@@ -558,6 +577,7 @@ function renderHRChartAdmDem(all, _pfx, selectedYear) {
   const admColors = years.map(y => selectedYear === y ? 'rgba(74,222,128,1)' : 'rgba(74,222,128,0.5)');
   const demColors = years.map(y => selectedYear === y ? 'rgba(248,113,113,1)' : 'rgba(248,113,113,0.45)');
 
+  const ui = _rhChartUi();
   chartHRAdmDemiss = new Chart(canvas, {
     type: 'bar',
     data: {
@@ -578,12 +598,17 @@ function renderHRChartAdmDem(all, _pfx, selectedYear) {
         }
       },
       plugins: {
-        legend: { labels: { color: '#ccc', font: { size: 11 } } },
-        tooltip: { callbacks: { title: items => `Ano ${items[0].label} — clique para filtrar` } }
+        legend: { labels: { color: ui.leg, font: { size: 11 } } },
+        tooltip: {
+          backgroundColor: ui.tooltipBg,
+          titleColor: ui.tooltipBody,
+          bodyColor: ui.tooltipBody,
+          callbacks: { title: items => `Ano ${items[0].label} — clique para filtrar` },
+        },
       },
       scales: {
-        x: { ticks: { color: '#aaa' }, grid: { color: 'rgba(255,255,255,0.05)' } },
-        y: { ticks: { color: '#aaa' }, grid: { color: 'rgba(255,255,255,0.05)' }, beginAtZero: true }
+        x: { ticks: { color: ui.tick }, grid: { color: ui.grid } },
+        y: { ticks: { color: ui.tick }, grid: { color: ui.grid }, beginAtZero: true }
       },
       cursor: 'pointer'
     }
@@ -642,11 +667,12 @@ function renderHRChartPieSetor(all, _pfx, selectedYear) {
   // Totais para porcentagem
   const total = data.reduce((a,b) => a+b, 0);
 
+  const ui = _rhChartUi();
   chartHRPie = new Chart(canvas, {
     type: 'doughnut',
     data: {
       labels,
-      datasets: [{ data, backgroundColor: colors, borderWidth: 2, borderColor: '#1a1a2e', hoverOffset: 8 }]
+      datasets: [{ data, backgroundColor: colors, borderWidth: 2, borderColor: ui.donutBorder, hoverOffset: 8 }]
     },
     options: {
       responsive: true, maintainAspectRatio: false,
@@ -655,7 +681,7 @@ function renderHRChartPieSetor(all, _pfx, selectedYear) {
         legend: {
           position: 'right',
           labels: {
-            color: '#ccc', font: { size: 12, weight: '600' }, padding: 12,
+            color: ui.leg, font: { size: 12, weight: '600' }, padding: 12,
             generateLabels: chart => {
               const ds = chart.data.datasets[0];
               return chart.data.labels.map((lbl, i) => ({
@@ -669,6 +695,9 @@ function renderHRChartPieSetor(all, _pfx, selectedYear) {
           }
         },
         tooltip: {
+          backgroundColor: ui.tooltipBg,
+          titleColor: ui.tooltipBody,
+          bodyColor: ui.tooltipBody,
           callbacks: {
             label: ctx => ` ${ctx.label}: ${ctx.raw} colaboradores (${total > 0 ? ((ctx.raw/total)*100).toFixed(1) : 0}%)`
           }
@@ -718,6 +747,7 @@ function renderHRChartTurnMonthly(all, _pfx) {
     return ativo > 0 ? parseFloat((deslig / ativo * 100).toFixed(1)) : 0;
   });
 
+  const ui = _rhChartUi();
   chartHRTurnMonthly = new Chart(canvas, {
     type: 'line',
     data: {
@@ -730,10 +760,13 @@ function renderHRChartTurnMonthly(all, _pfx) {
     },
     options: {
       responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { labels: { color: '#ccc', font: { size: 11 } } } },
+      plugins: {
+        legend: { labels: { color: ui.leg, font: { size: 11 } } },
+        tooltip: { backgroundColor: ui.tooltipBg, titleColor: ui.tooltipBody, bodyColor: ui.tooltipBody },
+      },
       scales: {
-        x: { ticks: { color: '#aaa', font:{size:10} }, grid: { color: 'rgba(255,255,255,0.05)' } },
-        y: { ticks: { color: '#aaa', callback: v => v+'%' }, grid: { color: 'rgba(255,255,255,0.05)' }, beginAtZero: true }
+        x: { ticks: { color: ui.tick, font:{size:10} }, grid: { color: ui.grid } },
+        y: { ticks: { color: ui.tick, callback: v => v+'%' }, grid: { color: ui.grid }, beginAtZero: true }
       }
     }
   });
@@ -758,6 +791,7 @@ function renderHRChartAge(ativos, _pfx) {
     else faixas['43+']++;
   });
 
+  const ui = _rhChartUi();
   chartHRAge = new Chart(canvas, {
     type: 'bar',
     data: {
@@ -766,10 +800,10 @@ function renderHRChartAge(ativos, _pfx) {
     },
     options: {
       responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
+      plugins: { legend: { display: false }, tooltip: { backgroundColor: ui.tooltipBg, titleColor: ui.tooltipBody, bodyColor: ui.tooltipBody } },
       scales: {
-        x: { ticks: { color: '#aaa' }, grid: { color: 'rgba(255,255,255,0.05)' } },
-        y: { ticks: { color: '#aaa' }, grid: { color: 'rgba(255,255,255,0.05)' }, beginAtZero: true }
+        x: { ticks: { color: ui.tick }, grid: { color: ui.grid } },
+        y: { ticks: { color: ui.tick }, grid: { color: ui.grid }, beginAtZero: true }
       }
     }
   });
@@ -792,6 +826,7 @@ function renderHRChartTenure(desligados, _pfx) {
     else             faixas['> 2 anos']++;
   });
 
+  const ui = _rhChartUi();
   chartHRTurnover = new Chart(canvas, {
     type: 'bar',
     data: {
@@ -800,10 +835,10 @@ function renderHRChartTenure(desligados, _pfx) {
     },
     options: {
       responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: false } },
+      plugins: { legend: { display: false }, tooltip: { backgroundColor: ui.tooltipBg, titleColor: ui.tooltipBody, bodyColor: ui.tooltipBody } },
       scales: {
-        x: { ticks: { color: '#aaa' }, grid: { color: 'rgba(255,255,255,0.05)' } },
-        y: { ticks: { color: '#aaa' }, grid: { color: 'rgba(255,255,255,0.05)' }, beginAtZero: true }
+        x: { ticks: { color: ui.tick }, grid: { color: ui.grid } },
+        y: { ticks: { color: ui.tick }, grid: { color: ui.grid }, beginAtZero: true }
       }
     }
   });

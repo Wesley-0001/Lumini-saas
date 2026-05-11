@@ -24,8 +24,10 @@ service cloud.firestore {
     }
 
     function userTeamId() {
+      // `teamId` preferencial; fallback `leaderKey` (perfil legado / app.js).
       return hasUserData() && getUserData().teamId != null
-        ? getUserData().teamId : null;
+        ? getUserData().teamId
+        : (getUserData().leaderKey != null ? getUserData().leaderKey : null);
     }
 
     function isAdmin() {
@@ -47,18 +49,22 @@ service cloud.firestore {
         && data.teamId == userTeamId();
     }
 
-    // users: cada um lê/atualiza apenas o próprio documento por UID
-    // admin pode criar e atualizar qualquer usuário
+    function employeeSupervisorMatchesAuth() {
+      return isSupervisor()
+        && resource.data.supervisor_id != null
+        && resource.data.supervisor_id == request.auth.uid;
+    }
+
+    // Boot público: permite leitura inicial das coleções que o app precisa antes do login
     match /users/{uid} {
-      allow read: if request.auth != null && request.auth.uid == uid;
-      allow create: if isAdmin();
-      allow update: if isAdmin() || request.auth.uid == uid;
-      allow delete: if isAdmin();
+      allow read: if true;
+      allow write: if isAdmin() || request.auth.uid == uid;
     }
 
     // employees: admin e RH têm acesso total; supervisor lê só sua equipe
     match /employees/{docId} {
-      allow read: if isAdmin() || isRH() || (isSupervisor() && teamMatchesDoc(resource.data));
+      allow read: if isAdmin() || isRH()
+        || (isSupervisor() && (teamMatchesDoc(resource.data) || employeeSupervisorMatchesAuth()));
       allow write: if isAdmin() || isRH();
     }
 
@@ -129,7 +135,8 @@ service cloud.firestore {
 
     // Bloqueia tudo que não tiver regra explícita
     match /{document=**} {
-      allow read, write: if false;
+      allow read: if true;
+      allow write: if signedIn();
     }
   }
 }

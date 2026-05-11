@@ -1,4 +1,21 @@
 {
-  "indexes": [],
+  "indexes": [
+    {
+      "collectionGroup": "daily_attendance",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "teamId", "order": "ASCENDING" },
+        { "fieldPath": "month_year", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "daily_attendance",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "supervisor_id", "order": "ASCENDING" },
+        { "fieldPath": "month_year", "order": "ASCENDING" }
+      ]
+    }
+  ],
   "fieldOverrides": []
 }

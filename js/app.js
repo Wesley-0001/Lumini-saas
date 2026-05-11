@@ -27,6 +27,70 @@ window.toggleDarkMode = function(isDark) {
   // Atualiza tooltip
   const label = document.getElementById('dark-toggle-label');
   if (label) label.title = isDark ? 'Modo claro' : 'Modo escuro';
+
+  document.dispatchEvent(new CustomEvent('lumini-theme-changed', { detail: { isDark } }));
+  if (window._ntRefreshAllChartsTheme) window._ntRefreshAllChartsTheme();
+};
+
+/** Cores de eixo/tooltip alinhadas às CSS variables do tema (Chart.js). */
+window._ntChartPalette = function _ntChartPalette() {
+  const s = getComputedStyle(document.body);
+  const v = (k, fb) => {
+    const x = (s.getPropertyValue(k) || '').trim();
+    return x || fb;
+  };
+  return {
+    tooltipBg: v('--chart-tooltip-bg', '#1e293b'),
+    tooltipBody: v('--chart-tooltip-color', '#f1f5f9'),
+    axisTick: v('--chart-axis-tick', '#64748b'),
+    axisLabel: v('--chart-axis-label', '#334155'),
+    grid: v('--chart-grid-color', 'rgba(148, 163, 184, 0.22)'),
+    donutBorder: v('--chart-donut-border', '#ffffff'),
+    legendText: v('--chart-legend-text', '#475569'),
+  };
+};
+
+window._ntApplyChartTheme = function _ntApplyChartTheme(chart) {
+  if (!chart || !chart.options) return;
+  const p = window._ntChartPalette();
+  const o = chart.options;
+  o.plugins = o.plugins || {};
+  if (o.plugins.legend && o.plugins.legend.display !== false) {
+    o.plugins.legend.labels = Object.assign({}, o.plugins.legend.labels, { color: p.legendText });
+  }
+  o.plugins.tooltip = Object.assign({}, o.plugins.tooltip, {
+    backgroundColor: p.tooltipBg,
+    titleColor: p.tooltipBody,
+    bodyColor: p.tooltipBody,
+  });
+  const scales = o.scales || {};
+  Object.keys(scales).forEach((k) => {
+    const sc = scales[k];
+    if (!sc || typeof sc !== 'object') return;
+    if (sc.ticks) sc.ticks.color = p.axisTick;
+    if (sc.grid && sc.grid.display !== false) sc.grid.color = p.grid;
+  });
+  const typ = chart.config && chart.config.type;
+  if ((typ === 'doughnut' || typ === 'pie') && chart.data && chart.data.datasets && chart.data.datasets[0]) {
+    chart.data.datasets[0].borderColor = p.donutBorder;
+  }
+  chart.update('none');
+};
+
+window._ntRefreshAllChartsTheme = function _ntRefreshAllChartsTheme() {
+  [
+    chartStatus,
+    chartPie,
+    chartEval,
+    chartSupCargoPie,
+    chartSupCareerBar,
+    window._chartByRole,
+    window._chartByTeam,
+    window._bossChartTeam,
+    window._bossChartStatus,
+  ]
+    .filter(Boolean)
+    .forEach((c) => window._ntApplyChartTheme(c));
 };
 
 // Inicializa o estado visual do toggle ao DOM estar pronto
@@ -49,6 +113,8 @@ let starRating = 0;
 let chartStatus = null;
 let chartPie = null;
 let chartEval = null;
+let chartSupCargoPie = null;
+let chartSupCareerBar = null;
 
 // ─── DEBUG / LOGGING ─────────────────────────
 function _ntReadDebugFlag() {
@@ -384,6 +450,8 @@ async function _ensureBasicUserInSession(firebaseUser) {
   const email = String(firebaseUser?.email || '').trim().toLowerCase();
   if (!email) return null;
 
+  const uid = String(firebaseUser?.uid || '').trim();
+
   // 1) Se já existe sessão consistente, usa ela
   const fromSession = _readCpUser();
   if (_hasBasicSessionUser(fromSession)) return fromSession;
@@ -416,8 +484,10 @@ async function _ensureBasicUserInSession(firebaseUser) {
     throw err;
   }
 
-  // Normaliza para o formato usado pelo app
-  const role = String(profile.role || profile.papel || '').trim() || 'supervisor';
+  // Normaliza para o formato usado pelo app (Firestore pode vir como "Admin", "MANAGER", etc.)
+  const role = String(profile.role || profile.papel || '')
+    .trim()
+    .toLowerCase() || 'supervisor';
   const name = String(profile.name || profile.nome || '').trim() || email;
 
   // Supervisor: mantém compat com filtros existentes (email = leaderKey)
@@ -427,6 +497,7 @@ async function _ensureBasicUserInSession(firebaseUser) {
     : rawLeaderKey;
   const userObj = (role === 'supervisor')
     ? {
+        uid:        uid || undefined,
         email:      leaderKey || email, // compat: filtros antigos usam currentUser.email como chave de equipe
         loginEmail: email,
         name,
@@ -434,6 +505,7 @@ async function _ensureBasicUserInSession(firebaseUser) {
         leaderKey: leaderKey || undefined
       }
     : {
+        uid:        uid || undefined,
         email,
         loginEmail: email,
         name,
@@ -712,6 +784,8 @@ async function doLogin() {
     }
     try {
       await signIn(fbAuth, email, pass);
+      const uu = fbAuth.currentUser && fbAuth.currentUser.uid ? String(fbAuth.currentUser.uid) : '';
+      if (uu) user.uid = uu;
     } catch (error) {
       const code = String(error?.code || '').toLowerCase();
       if (['auth/wrong-password', 'auth/invalid-credential'].includes(code)) {
@@ -822,22 +896,17 @@ function startApp() {
 
   if (currentUser.role === 'admin') {
     document.getElementById('menu-admin').classList.remove('hidden');
-    // Admin deve cair direto na visão macro por supervisor
-    navigateTo('admin-supervisors');
   } else if (currentUser.role === 'boss') {
     document.getElementById('menu-boss').classList.remove('hidden');
-    navigateTo('boss-dashboard');
   } else if (currentUser.role === 'manager') {
     document.getElementById('menu-manager').classList.remove('hidden');
-    navigateTo('supervisor-home');
   } else if (currentUser.role === 'rh') {
     document.getElementById('menu-rh').classList.remove('hidden');
-    navigateTo('rh-dashboard');
   } else {
     document.getElementById('menu-supervisor').classList.remove('hidden');
-    // Supervisor deve cair direto na tela de chamada/frequência
-    navigateTo('supervisor-team-attendance');
   }
+  // Todos os roles iniciam na tela de Início
+  navigateTo('supervisor-home');
 
   // Mostra itens de menu condicionais por permissão
   _applyMenuPermissions();
@@ -849,6 +918,10 @@ function startApp() {
   updateNotifBadge();
   initNotifications();
   updateExcecoesBadges();
+
+  if (typeof window._ntBindEmployeesFirestoreListener === 'function') {
+    window._ntBindEmployeesFirestoreListener();
+  }
 
   // Inicia onboarding automaticamente no primeiro acesso
   if (window._onboardingAutoStart) {
@@ -947,7 +1020,13 @@ function doLogout() {
     window.location.replace('login.html');
   };
 
-  finalize();
+  const fbAuth = window._fbAuth;
+  const fbSignOut = window._fbSignOut;
+  if (fbAuth && typeof fbSignOut === 'function') {
+    fbSignOut(fbAuth).catch(() => {}).finally(finalize);
+  } else {
+    finalize();
+  }
 }
 
 Object.defineProperty(window, 'currentUser', { get: () => currentUser, set: v => { currentUser = v; } });
@@ -1361,15 +1440,16 @@ function renderAdminDashboard() {
     const ctx = document.getElementById('chart-by-role');
     if (!ctx) return;
 
+    const p = window._ntChartPalette();
     window._chartByRole = new Chart(ctx, {
       type: 'bar',
       data: { labels, datasets: [{ label:'Funcionários', data, backgroundColor:bgColors, hoverBackgroundColor:bgColors.map(c=>c.slice(0,7)+'BB'), borderRadius:7, borderSkipped:false, borderWidth:0 }] },
       options: {
         indexAxis: 'y', responsive:true, maintainAspectRatio:false, animation:{duration:400,easing:'easeOutQuart'},
-        plugins: { legend:{display:false}, tooltip:{ backgroundColor:'#1F2937', padding:10, cornerRadius:8, callbacks:{ title:ctx=>ctx[0].label, label:ctx=>` ${ctx.parsed.x} funcionário${ctx.parsed.x!==1?'s':''}` } } },
+        plugins: { legend:{display:false}, tooltip:{ backgroundColor:p.tooltipBg, titleColor:p.tooltipBody, bodyColor:p.tooltipBody, padding:10, cornerRadius:8, callbacks:{ title:ctx=>ctx[0].label, label:ctx=>` ${ctx.parsed.x} funcionário${ctx.parsed.x!==1?'s':''}` } } },
         scales: {
-          x: { beginAtZero:true, ticks:{stepSize:1,font:{size:11},color:'#9CA3AF'}, grid:{color:'#F3F4F6'}, border:{display:false} },
-          y: { ticks:{ font:{size:11,weight:'500'}, color:'#374151', callback:function(val,i){ const lbl=this.getLabelForValue(val); return lbl.length>22?lbl.slice(0,20)+'…':lbl; } }, grid:{display:false}, border:{display:false} }
+          x: { beginAtZero:true, ticks:{stepSize:1,font:{size:11},color:p.axisTick}, grid:{color:p.grid}, border:{display:false} },
+          y: { ticks:{ font:{size:11,weight:'500'}, color:p.axisLabel, callback:function(val,i){ const lbl=this.getLabelForValue(val); return lbl.length>22?lbl.slice(0,20)+'…':lbl; } }, grid:{display:false}, border:{display:false} }
         }
       }
     });
@@ -1395,12 +1475,13 @@ function renderAdminDashboard() {
   if (window._chartByTeam) { window._chartByTeam.destroy(); window._chartByTeam = null; }
   const teamCtx = document.getElementById('chart-by-team');
   if (teamCtx) {
+    const p = window._ntChartPalette();
     window._chartByTeam = new Chart(teamCtx, {
       type: 'doughnut',
-      data: { labels:teamLabels, datasets:[{ data:teamData, backgroundColor:teamBgs, borderWidth:2, borderColor:'#fff', hoverOffset:12 }] },
+      data: { labels:teamLabels, datasets:[{ data:teamData, backgroundColor:teamBgs, borderWidth:2, borderColor:p.donutBorder, hoverOffset:12 }] },
       options: {
         responsive:true, maintainAspectRatio:false, cutout:'62%', layout:{padding:6}, animation:{duration:350},
-        plugins: { legend:{display:false}, tooltip:{ backgroundColor:'#1F2937', padding:10, cornerRadius:8, callbacks:{ label:ctx=>` ${ctx.label}: ${ctx.parsed} funcionário${ctx.parsed!==1?'s':''}` } } },
+        plugins: { legend:{display:false}, tooltip:{ backgroundColor:p.tooltipBg, titleColor:p.tooltipBody, bodyColor:p.tooltipBody, padding:10, cornerRadius:8, callbacks:{ label:ctx=>` ${ctx.label}: ${ctx.parsed} funcionário${ctx.parsed!==1?'s':''}` } } },
         onClick(evt,elements) {
           if (!elements.length) { highlightTeam(null); return; }
           const idx = elements[0].index;
@@ -1442,13 +1523,14 @@ function renderAdminDashboard() {
   if (chartStatus) { chartStatus.destroy(); chartStatus = null; }
   const ctx = document.getElementById('chart-status');
   if (ctx) {
+    const p = window._ntChartPalette();
     chartStatus = new Chart(ctx, {
       type: 'bar',
       data: {
         labels: ['Cadastrado','Em Período','Apto p/ Aval.','Ag. Samuel','Ag. Carlos','Aprovado','Promovido'], // Ag. Samuel = pending_samuel (gerente)
         datasets: [{ label:'Funcionários', data:[statusReg,statusPeriod,statusReady,statusPSamuel,statusPCarlos,statusApproved,statusPromoted], backgroundColor:['#E0E7FF','#FEE2E2','#FEF3C7','#FDE68A','#DDD6FE','#DCFCE7','#EDE9FE'], borderColor:['#6366F1','#DC2626','#D97706','#B45309','#7C3AED','#16A34A','#5D36C5'], borderWidth:2, borderRadius:8 }]
       },
-      options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{display:false}, tooltip:{ callbacks:{ label:ctx=>` ${ctx.parsed.y} funcionário${ctx.parsed.y!==1?'s':''}` } } }, scales:{ y:{beginAtZero:true,ticks:{stepSize:1},grid:{color:'#F3F4F6'}}, x:{grid:{display:false},ticks:{font:{size:11}}} } }
+      options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{display:false}, tooltip:{ backgroundColor:p.tooltipBg, titleColor:p.tooltipBody, bodyColor:p.tooltipBody, callbacks:{ label:ctx=>` ${ctx.parsed.y} funcionário${ctx.parsed.y!==1?'s':''}` } } }, scales:{ y:{beginAtZero:true,ticks:{stepSize:1,color:p.axisTick},grid:{color:p.grid}}, x:{grid:{display:false},ticks:{font:{size:11},color:p.axisTick}} } }
     });
   }
 
@@ -2655,30 +2737,131 @@ function renderEvaluationsList() {
 
 function printEvaluations() { window.print(); }
 
+/** Visão global da matriz (setor / consolidado) — admin, diretor, gerente, RH. */
+function _ntMatrixHasFullSectorAccess() {
+  const r = String(currentUser && currentUser.role ? currentUser.role : '').toLowerCase();
+  return r === 'admin' || r === 'boss' || r === 'manager' || r === 'rh';
+}
+
+/** Mesma regra de escopo de equipe: supervisor_id (UID) ou chave de equipe (teamId/supervisor). */
+function _ntEmployeeBelongsToSupervisorScope(emp, supUser) {
+  if (!emp || !supUser || String(supUser.role || '').toLowerCase() !== 'supervisor') return false;
+  const uid = String(supUser.uid || '').trim();
+  if (uid && String(emp.supervisor_id || '').trim() === uid) return true;
+  const teamNorm = typeof window._ntNormalizeTeamId === 'function'
+    ? window._ntNormalizeTeamId(String(supUser.leaderKey || supUser.email || ''))
+    : String(supUser.leaderKey || supUser.email || '').trim();
+  const empTeam = typeof window._ntNormalizeTeamId === 'function'
+    ? window._ntNormalizeTeamId(String(emp.teamId || emp.supervisor || ''))
+    : String(emp.teamId || emp.supervisor || '').trim();
+  return !!teamNorm && !!empTeam && empTeam === teamNorm;
+}
+
+function _ntMyTeamEmployees(employees) {
+  const list = Array.isArray(employees) ? employees : [];
+  if (!currentUser || currentUser.role !== 'supervisor') return list;
+  return list.filter(e => _ntEmployeeBelongsToSupervisorScope(e, currentUser));
+}
+
+/** Progresso 0–100% da trilha (ignora disponibilidade do dia — só para indicadores). */
+function _ntCareerProgressPctOnly(emp) {
+  if (!emp) return 0;
+  const e = { ...emp };
+  delete e._availabilityToday;
+  return getStatusInfo(e).pct;
+}
+
+function _ntSupTeamScopeKey() {
+  return String(currentUser && (currentUser.email || currentUser.leaderKey) || '').trim();
+}
+
+/** Segunda a domingo da semana corrente (calendário local). */
+function _ntIsoWeekRangeMonSun() {
+  const now = new Date();
+  const dow = now.getDay();
+  const mondayOffset = dow === 0 ? -6 : 1 - dow;
+  const monday = new Date(now);
+  monday.setDate(now.getDate() + mondayOffset);
+  monday.setHours(0, 0, 0, 0);
+  const sunday = new Date(monday);
+  sunday.setDate(monday.getDate() + 6);
+  const pad = n => String(n).padStart(2, '0');
+  const fmt = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  return { start: fmt(monday), end: fmt(sunday) };
+}
+
+/** Total de registros `falta` na semana (equipe = documento do supervisor; atestado não entra em `falta`). */
+async function _ntSupWeeklyFaltaCount(teamId) {
+  const tid = String(teamId || '').trim();
+  if (!tid || typeof window._ntGetDailyAttendanceSummariesForTeam !== 'function') return null;
+  if (window._dbReady === false) return null;
+  try {
+    const { start, end } = _ntIsoWeekRangeMonSun();
+    const map = await window._ntGetDailyAttendanceSummariesForTeam({ teamId: tid, startDate: start, endDate: end });
+    let total = 0;
+    map.forEach((sum) => { total += Number(sum && sum.faltas ? sum.faltas : 0); });
+    return total;
+  } catch (_) {
+    return null;
+  }
+}
+
+function _ntShortEmpLabel(name) {
+  const s = String(name || '').trim();
+  if (s.length <= 16) return s || '—';
+  return `${s.slice(0, 14)}…`;
+}
+
 // ─── MATRIX DE POLIVALÊNCIA ───────────────────
 function renderMatrix() {
-  const employees = getEmployees();
-  const skills    = DEMO_MATRIX_SKILLS || [];
-  const filterVal = document.getElementById('matrix-sector-filter')?.value||'';
+  const allEmployees = getEmployees();
+  const fullSector = currentUser && _ntMatrixHasFullSectorAccess();
+  const employees = fullSector ? allEmployees : _ntMyTeamEmployees(allEmployees);
 
-  const sectors   = [...new Set(employees.map(e=>e.sector||'Produção'))];
-  const filterEl  = document.getElementById('matrix-sector-filter');
-  if (filterEl && filterEl.options.length === 1) {
-    sectors.forEach(s => { const opt=document.createElement('option'); opt.value=s; opt.textContent=s; filterEl.appendChild(opt); });
+  const filterWrap = document.getElementById('matrix-sector-filter-wrap');
+  const filterEl = document.getElementById('matrix-sector-filter');
+  const supLabel = document.getElementById('matrix-supervisor-scope-label');
+  if (filterWrap && filterEl) {
+    if (fullSector) {
+      filterWrap.classList.remove('hidden');
+      filterEl.disabled = false;
+      if (supLabel) supLabel.classList.add('hidden');
+    } else {
+      filterWrap.classList.add('hidden');
+      filterEl.value = '';
+      filterEl.disabled = true;
+      if (supLabel) {
+        supLabel.classList.remove('hidden');
+        supLabel.textContent = 'Exibindo apenas a sua equipe';
+      }
+    }
   }
 
-  const filtered = filterVal ? employees.filter(e=>(e.sector||'Produção')===filterVal) : employees;
+  const skills = DEMO_MATRIX_SKILLS || [];
+  const filterVal = fullSector ? (filterEl?.value || '') : '';
+
+  const sectors = [...new Set(employees.map(e => e.sector || 'Produção'))];
+  if (fullSector && filterEl && filterEl.options.length === 1) {
+    sectors.forEach(s => {
+      const opt = document.createElement('option');
+      opt.value = s;
+      opt.textContent = s;
+      filterEl.appendChild(opt);
+    });
+  }
+
+  const filtered = filterVal ? employees.filter(e => (e.sector || 'Produção') === filterVal) : employees;
   const container = document.getElementById('matrix-container');
   if (!container) return;
 
   if (!filtered.length) {
-    container.innerHTML = `<div class="empty-state"><i class="fas fa-th"></i><p>Nenhum funcionário cadastrado</p></div>`;
+    container.innerHTML = `<div class="empty-state"><i class="fas fa-th"></i><p>Nenhum funcionário neste escopo</p></div>`;
     return;
   }
 
-  const SKILL_LEVELS = { 0:'', 1:'red', 2:'yellow', 3:'green', 4:'star' };
-  const SKILL_ICONS  = { 0:'—', 1:'✕', 2:'◐', 3:'✓', 4:'★' };
-  const SKILL_LABELS = { 0:'Não avaliado', 1:'Não Treinado', 2:'Em Treinamento', 3:'Competente', 4:'Referência' };
+  const SKILL_LEVELS = { 0: '', 1: 'red', 2: 'yellow', 3: 'green', 4: 'star' };
+  const SKILL_ICONS = { 0: '—', 1: '✕', 2: '◐', 3: '✓', 4: '★' };
+  const SKILL_LABELS = { 0: 'Não avaliado', 1: 'Não Treinado', 2: 'Em Treinamento', 3: 'Competente', 4: 'Referência' };
 
   container.innerHTML = `
     <div class="matrix-table-wrap">
@@ -2686,7 +2869,7 @@ function renderMatrix() {
         <thead>
           <tr>
             <th class="matrix-name-th">Funcionário</th>
-            ${skills.map(s=>`<th class="matrix-skill-th">${s}</th>`).join('')}
+            ${skills.map(s => `<th class="matrix-skill-th">${s}</th>`).join('')}
           </tr>
         </thead>
         <tbody>
@@ -2694,10 +2877,10 @@ function renderMatrix() {
           <tr>
             <td class="matrix-emp-cell">
               <div class="matrix-emp-name">${emp.name}</div>
-              <div class="matrix-emp-role">${emp.currentRole||''}</div>
+              <div class="matrix-emp-role">${emp.currentRole || ''}</div>
             </td>
             ${skills.map(skill => {
-              const lvl = (emp.skills||{})[skill]||0;
+              const lvl = (emp.skills || {})[skill] || 0;
               return `<td class="matrix-skill-cell" onclick="cycleSkill('${emp.id}','${skill}',${lvl})">
                 <span class="matrix-dot ${SKILL_LEVELS[lvl]}" title="${SKILL_LABELS[lvl]}">${SKILL_ICONS[lvl]}</span>
               </td>`;
@@ -2734,10 +2917,11 @@ function renderReports() {
   };
   const pieCtx = document.getElementById('chart-pie-status');
   if (pieCtx) {
+    const p = window._ntChartPalette();
     chartPie = new Chart(pieCtx, {
       type: 'pie',
-      data: { labels:Object.keys(pieCounts), datasets:[{ data:Object.values(pieCounts), backgroundColor:['#E0E7FF','#FEE2E2','#FEF3C7','#DDD6FE','#DCFCE7','#EDE9FE'], borderWidth:2 }] },
-      options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:'right' } } }
+      data: { labels:Object.keys(pieCounts), datasets:[{ data:Object.values(pieCounts), backgroundColor:['#E0E7FF','#FEE2E2','#FEF3C7','#DDD6FE','#DCFCE7','#EDE9FE'], borderWidth:2, borderColor: p.donutBorder }] },
+      options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{ position:'right', labels:{ color: p.legendText, font:{ size:11 } } } } }
     });
   }
 
@@ -2747,10 +2931,11 @@ function renderReports() {
   const evalPending  = evaluations.filter(e=>e.result==='pending').length;
   const evalCtx = document.getElementById('chart-eval-result');
   if (evalCtx) {
+    const p = window._ntChartPalette();
     chartEval = new Chart(evalCtx, {
       type: 'bar',
       data: { labels:['Aprovados','Reprovados','Pendentes'], datasets:[{ data:[evalApproved,evalReproved,evalPending], backgroundColor:['#DCFCE7','#FEE2E2','#FEF3C7'], borderColor:['#16A34A','#DC2626','#D97706'], borderWidth:2, borderRadius:8 }] },
-      options: { responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{ y:{beginAtZero:true,ticks:{stepSize:1}}, x:{grid:{display:false}} } }
+      options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{display:false}, tooltip:{ backgroundColor:p.tooltipBg, titleColor:p.tooltipBody, bodyColor:p.tooltipBody } }, scales:{ y:{beginAtZero:true,ticks:{stepSize:1,color:p.axisTick},grid:{color:p.grid}}, x:{grid:{display:false},ticks:{color:p.axisTick}} } }
     });
   }
 
@@ -2774,55 +2959,220 @@ function renderReports() {
 }
 
 // ─── SUPERVISOR HOME ──────────────────────────
+function _renderSupervisorDashboardCharts(myTeam) {
+  const p = window._ntChartPalette();
+  const palette = ['#002B5B', '#1B4F8A', '#003366', '#0891B2', '#059669', '#9333EA', '#B45309', '#7B2D8B', '#FF6B9D', '#0F766E', '#C2410C'];
+
+  if (chartSupCargoPie) { chartSupCargoPie.destroy(); chartSupCargoPie = null; }
+  const pieCtx = document.getElementById('sup-chart-cargo-pie');
+  if (pieCtx) {
+    const counts = {};
+    myTeam.forEach((e) => {
+      const r = String(e.currentRole || 'Sem cargo').trim() || 'Sem cargo';
+      counts[r] = (counts[r] || 0) + 1;
+    });
+    const sorted = Object.entries(counts).sort((a, b) => b[1] - a[1]);
+    const labels = sorted.map(([r]) => r);
+    const data = sorted.map(([, n]) => n);
+    const bgColors = labels.map((_, i) => palette[i % palette.length]);
+
+    if (!labels.length) {
+      chartSupCargoPie = new Chart(pieCtx, {
+        type: 'pie',
+        data: { labels: ['Sem colaboradores'], datasets: [{ data: [1], backgroundColor: ['#CBD5E1'], borderWidth: 2, borderColor: p.donutBorder }] },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: p.tooltipBg,
+              titleColor: p.tooltipBody,
+              bodyColor: p.tooltipBody,
+              callbacks: { label: () => ' Adicione colaboradores à sua equipe' }
+            }
+          }
+        }
+      });
+    } else {
+      chartSupCargoPie = new Chart(pieCtx, {
+        type: 'pie',
+        data: {
+          labels,
+          datasets: [{
+            data,
+            backgroundColor: bgColors,
+            borderWidth: 2,
+            borderColor: p.donutBorder,
+            hoverOffset: 8
+          }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { position: 'right', labels: { color: p.legendText, font: { size: 11 }, boxWidth: 12 } },
+            tooltip: {
+              backgroundColor: p.tooltipBg,
+              titleColor: p.tooltipBody,
+              bodyColor: p.tooltipBody,
+              callbacks: {
+                label: (ctx) => {
+                  const v = ctx.parsed;
+                  const tot = data.reduce((a, b) => a + b, 0);
+                  const pct = tot ? Math.round((v / tot) * 100) : 0;
+                  return ` ${v} colaborador${v !== 1 ? 'es' : ''} (${pct}%)`;
+                }
+              }
+            }
+          }
+        }
+      });
+    }
+  }
+
+  if (chartSupCareerBar) { chartSupCareerBar.destroy(); chartSupCareerBar = null; }
+  const barCtx = document.getElementById('sup-chart-career-bar');
+  const subEl = document.getElementById('sup-chart-career-sub');
+  if (subEl) {
+    if (!myTeam.length) {
+      subEl.textContent = 'Adicione colaboradores ao escopo para ver o progresso.';
+    } else {
+      const pctVals = myTeam.map((e) => _ntCareerProgressPctOnly(e));
+      const avg = Math.round(pctVals.reduce((a, b) => a + b, 0) / pctVals.length);
+      subEl.textContent = `Média da equipe: ${avg}% · barras = progresso rumo ao tempo mínimo do cargo desejado`;
+    }
+  }
+
+  if (barCtx) {
+    const sortedTeam = [...myTeam].sort((a, b) => _ntCareerProgressPctOnly(b) - _ntCareerProgressPctOnly(a));
+    const labels = sortedTeam.map((e) => _ntShortEmpLabel(e.name));
+    const data = sortedTeam.map((e) => _ntCareerProgressPctOnly(e));
+    const colors = data.map((v) => (v >= 100 ? '#059669' : v >= 50 ? '#D97706' : '#DC2626'));
+
+    if (!sortedTeam.length) {
+      chartSupCareerBar = new Chart(barCtx, {
+        type: 'bar',
+        data: { labels: ['—'], datasets: [{ label: 'Progresso', data: [0], backgroundColor: ['#CBD5E1'], borderRadius: 8 }] },
+        options: {
+          indexAxis: 'y',
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { display: false }, tooltip: { enabled: false } },
+          scales: {
+            x: { beginAtZero: true, max: 100, ticks: { color: p.axisTick }, grid: { color: p.grid } },
+            y: { ticks: { color: p.axisLabel } }
+          }
+        }
+      });
+    } else {
+      chartSupCareerBar = new Chart(barCtx, {
+        type: 'bar',
+        data: {
+          labels,
+          datasets: [{
+            label: 'Progresso',
+            data,
+            backgroundColor: colors,
+            borderRadius: 8,
+            borderSkipped: false,
+            borderWidth: 0
+          }]
+        },
+        options: {
+          indexAxis: 'y',
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              backgroundColor: p.tooltipBg,
+              titleColor: p.tooltipBody,
+              bodyColor: p.tooltipBody,
+              callbacks: {
+                title: (items) => {
+                  const i = items[0].dataIndex;
+                  const emp = sortedTeam[i];
+                  return emp ? emp.name : '';
+                },
+                label: (ctx) => ` ${ctx.parsed.x}%`
+              }
+            }
+          },
+          scales: {
+            x: {
+              beginAtZero: true,
+              max: 100,
+              ticks: { color: p.axisTick, callback: (v) => `${v}%` },
+              grid: { color: p.grid },
+              border: { display: false }
+            },
+            y: {
+              ticks: { color: p.axisLabel, font: { size: 11 } },
+              grid: { display: false },
+              border: { display: false }
+            }
+          }
+        }
+      });
+    }
+  }
+}
+
 function renderSupervisorHome() {
   const employees = getEmployees();
-  const myTeam    = currentUser.role==='supervisor' ? employees.filter(e=>e.supervisor===currentUser.email) : employees;
+  const myTeam = _ntMyTeamEmployees(employees);
   const evaluations = getEvaluations();
-  // "Aguardam Avaliação" = tenure > X dias (se nunca avaliou) OU última avaliação > 90 dias
-  const eligible  = myTeam.filter(e => _isAwaitingSupervisorEvaluation(e, evaluations));
-  const pending   = myTeam.filter(e => ['pending_samuel','pending_samuel_return','pending_carlos'].includes(e.status));
+  const eligible = myTeam.filter((e) => _isAwaitingSupervisorEvaluation(e, evaluations));
+  const pending = myTeam.filter((e) => ['pending_samuel', 'pending_samuel_return', 'pending_carlos'].includes(e.status));
 
-  document.getElementById('supervisor-greeting').textContent = `Olá, ${currentUser.name}! 👋`;
+  const greet = document.getElementById('supervisor-greeting');
+  if (greet) greet.textContent = `Olá, ${currentUser.name}! 👋`;
 
-  const alertEl = document.getElementById('supervisor-alert');
-  const alertTxt= document.getElementById('supervisor-alert-text');
-  if (eligible.length > 0) {
-    alertEl.classList.remove('hidden');
-    alertTxt.textContent = `Você tem ${eligible.length} funcionário${eligible.length>1?'s':''} aguardando avaliação!`;
-  } else {
-    alertEl.classList.add('hidden');
+  const totalEl = document.getElementById('sup-stat-total');
+  if (totalEl) totalEl.textContent = myTeam.length;
+  const pendEl = document.getElementById('sup-stat-pending');
+  if (pendEl) pendEl.textContent = eligible.length;
+
+  const evalCard = document.getElementById('sup-dash-alert-eval');
+  if (evalCard) {
+    const n = eligible.length;
+    evalCard.className = `sup-dash-alert ${n === 0 ? 'sup-dash-alert--ok' : 'sup-dash-alert--warn'}`;
+    evalCard.innerHTML = `
+      <div class="sup-dash-alert-icon"><i class="fas fa-calendar-check"></i></div>
+      <div class="sup-dash-alert-body">
+        <div class="sup-dash-alert-title">Vencimento de avaliações</div>
+        <p class="sup-dash-alert-text">${n === 0 ? 'Nenhum colaborador pendente de avaliação pelas regras atuais.' : `${n} colaborador${n !== 1 ? 'es' : ''} ${n !== 1 ? 'precisam' : 'precisa'} de avaliação (tempo de casa ou ciclo de 90 dias).`}</p>
+        <button type="button" class="btn-outline btn-sm sup-dash-alert-btn" onclick="navigateTo('supervisor-employees')"><i class="fas fa-users"></i> Minha Equipe</button>
+      </div>
+      <div class="sup-dash-alert-value" aria-label="Quantidade">${n}</div>`;
   }
 
-  document.getElementById('sup-stat-total').textContent   = myTeam.length;
-  document.getElementById('sup-stat-pending').textContent = eligible.length;
+  const absCard = document.getElementById('sup-dash-alert-abs');
+  const absVal = document.getElementById('sup-dash-alert-abs-val');
+  const absSub = document.getElementById('sup-dash-alert-abs-sub');
+  if (absVal) absVal.textContent = '…';
+  if (absSub) absSub.textContent = 'Carregando frequência da semana…';
+  if (absCard) absCard.className = 'sup-dash-alert';
 
-  const eligibleEl = document.getElementById('sup-eligible-list');
-  if (eligibleEl) {
-    if (!eligible.length) {
-      eligibleEl.innerHTML = `<div class="empty-state"><i class="fas fa-check-circle"></i><p>Nenhum funcionário aguardando avaliação</p></div>`;
+  _renderSupervisorDashboardCharts(myTeam);
+
+  const teamKey = _ntSupTeamScopeKey();
+  _ntSupWeeklyFaltaCount(teamKey).then((n) => {
+    if (!absVal || !absSub) return;
+    if (n === null) {
+      absVal.textContent = '—';
+      absSub.textContent = 'Frequência indisponível (conexão ou Firebase).';
+      if (absCard) absCard.className = 'sup-dash-alert sup-dash-alert--warn';
     } else {
-      // injeta disponibilidade de hoje (Falta → Ausente) antes de renderizar cards
-      _getTodayAttendanceMapForTeam(currentUser.email).then(map => {
-        const list = eligible.map(e => ({ ...e, _availabilityToday: map && map[String(e.id)] ? map[String(e.id)] : '' }));
-        eligibleEl.innerHTML = list.map(e => buildEmployeeCard(e, true)).join('');
-      });
+      absVal.textContent = String(n);
+      absSub.textContent = 'Faltas não justificadas na semana (seg–dom). Atestado é registrado separadamente.';
+      if (absCard) {
+        absCard.className = n === 0 ? 'sup-dash-alert sup-dash-alert--ok' : 'sup-dash-alert sup-dash-alert--danger';
+      }
     }
-  }
+  });
 
-  const allEl = document.getElementById('sup-all-list');
-  if (allEl) {
-    const non_eligible = myTeam.filter(e => !eligible.includes(e));
-    if (!non_eligible.length && !eligible.length) {
-      allEl.innerHTML = `<div class="empty-state"><i class="fas fa-users"></i><p>Nenhum funcionário na equipe ainda</p></div>`;
-    } else {
-      _getTodayAttendanceMapForTeam(currentUser.email).then(map => {
-        const list = non_eligible.map(e => ({ ...e, _availabilityToday: map && map[String(e.id)] ? map[String(e.id)] : '' }));
-        allEl.innerHTML = list.map(e => buildEmployeeCard(e, false)).join('');
-      });
-    }
-  }
-
-  // Banner de promoções em andamento
   const bannerContainer = document.getElementById('promo-shortcut-banner-container');
   if (bannerContainer && pending.length > 0) {
     bannerContainer.style.display = '';
@@ -2833,55 +3183,10 @@ function renderSupervisorHome() {
   }
 }
 
-function buildEmployeeCard(e, isEligible) {
-  const months = calcTenure(e.admission);
-  const si     = getStatusInfo(e);
-  const pct    = si.pct;
-  const pColor = getProgressColor(pct);
-
-  let actionBtn = '';
-  // Nunca mostra "Avaliar" se já está em fluxo de promoção
-  const blockedStatuses = _PROMO_BLOCKED_STATUSES;
-  // Ação "Avaliar" deve existir quando a regra de aguardando avaliação disparar
-  if (isEligible && !blockedStatuses.includes(e.status)) {
-    actionBtn = `<button class="btn-primary btn-sm" onclick="startEvaluation('${e.id}')"><i class="fas fa-star"></i> Avaliar Agora</button>`;
-  } else if (e.status === 'pending_samuel') {
-    actionBtn = `<button class="btn-outline btn-sm" disabled><i class="fas fa-hourglass-half"></i> Aguardando Samuel...</button>`;
-  } else if (e.status === 'pending_carlos') {
-    actionBtn = `<button class="btn-outline btn-sm" disabled><i class="fas fa-crown"></i> Aguardando Carlos...</button>`;
-  } else if (e.status === 'pending_samuel_return') {
-    actionBtn = `<button class="btn-outline btn-sm" disabled><i class="fas fa-arrow-left"></i> Retorno do Diretor</button>`;
-  } else if (e.status === 'promoted') {
-    actionBtn = `<div class="promo-badge-celebrate">🎉 Promovido!</div>`;
-  } else if (hasPendingExcecao(e.id)) {
-    actionBtn = supervisorExcecaoPendingButton();
-  } else if (canShowSupervisorExcecaoButton(e)) {
-    actionBtn = `<button class="btn-outline btn-sm" onclick="openExceptionRequest('${e.id}')"><i class="fas fa-file-signature"></i> Exceção</button>`;
-  } else if (canShowSupervisorPromoButton(e)) {
-    actionBtn = `<button class="btn-outline btn-sm" onclick="openPromoRequest('${e.id}')"><i class="fas fa-rocket"></i> Solicitar Promoção</button>`;
-  }
-
-  return `
-  <div class="emp-card ${e.status==='promoted'?'emp-card-promoted':''}">
-    <div class="emp-card-avatar">${getInitials(e.name)}</div>
-    <div class="emp-card-info">
-      <div class="emp-card-name">${e.name}</div>
-      <div class="emp-card-role">${e.currentRole}${e.desiredRole?` → ${e.desiredRole}`:''}</div>
-      <div class="emp-card-tenure">${tenureText(months)} · Admitido em ${formatDate(e.admission)}</div>
-      <div class="emp-card-status"><span class="status-badge ${si.cls}">${si.label}</span></div>
-      <div class="progress-wrap mt-8">
-        <div class="progress-bar-bg"><div class="progress-bar-fill ${pColor}" style="width:${pct}%"></div></div>
-        <span class="progress-pct">${pct}%</span>
-      </div>
-    </div>
-    <div class="emp-card-actions">${actionBtn}</div>
-  </div>`;
-}
-
 // ─── SUPERVISOR TEAM ──────────────────────────
 function renderSupervisorTeam() {
   const employees = getEmployees();
-  const myTeam    = currentUser.role==='supervisor' ? employees.filter(e=>e.supervisor===currentUser.email) : employees;
+  const myTeam    = _ntMyTeamEmployees(employees);
   const query     = (document.getElementById('search-sup-employees')?.value||'').toLowerCase();
   const filtered  = myTeam.filter(e => e.name.toLowerCase().includes(query)||(e.currentRole||'').toLowerCase().includes(query));
 
@@ -3538,10 +3843,11 @@ function renderBossDashboard() {
   if (window._bossChartTeam) { window._bossChartTeam.destroy(); window._bossChartTeam=null; }
   const bossTeamCtx = document.getElementById('boss-chart-team');
   if (bossTeamCtx) {
+    const p = window._ntChartPalette();
     window._bossChartTeam = new Chart(bossTeamCtx, {
       type: 'bar',
       data: { labels:teamLabels, datasets:[{ data:teamData, backgroundColor:teamColors, borderRadius:8, borderWidth:0 }] },
-      options: { responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{ y:{beginAtZero:true,ticks:{stepSize:1}}, x:{grid:{display:false}} } }
+      options: { responsive:true, maintainAspectRatio:false, plugins:{ legend:{display:false}, tooltip:{ backgroundColor:p.tooltipBg, titleColor:p.tooltipBody, bodyColor:p.tooltipBody } }, scales:{ y:{beginAtZero:true,ticks:{stepSize:1,color:p.axisTick},grid:{color:p.grid}}, x:{grid:{display:false},ticks:{color:p.axisTick}} } }
     });
   }
 
@@ -3558,10 +3864,11 @@ function renderBossDashboard() {
   if (window._bossChartStatus) { window._bossChartStatus.destroy(); window._bossChartStatus=null; }
   const bossStatusCtx = document.getElementById('boss-chart-status');
   if (bossStatusCtx) {
+    const p = window._ntChartPalette();
     window._bossChartStatus = new Chart(bossStatusCtx, {
       type: 'doughnut',
-      data: { labels:['Cadastrado','Em Período','Apto','Ag. Samuel','Ag. Carlos','Aprovado','Promovido'], datasets:[{ data:statusData, backgroundColor:['#E0E7FF','#FEE2E2','#FEF3C7','#FDE68A','#DDD6FE','#DCFCE7','#EDE9FE'], borderWidth:2 }] },
-      options: { responsive:true, maintainAspectRatio:false, cutout:'60%', plugins:{ legend:{position:'right',labels:{font:{size:11}}} } }
+      data: { labels:['Cadastrado','Em Período','Apto','Ag. Samuel','Ag. Carlos','Aprovado','Promovido'], datasets:[{ data:statusData, backgroundColor:['#E0E7FF','#FEE2E2','#FEF3C7','#FDE68A','#DDD6FE','#DCFCE7','#EDE9FE'], borderWidth:2, borderColor: p.donutBorder }] },
+      options: { responsive:true, maintainAspectRatio:false, cutout:'60%', plugins:{ legend:{position:'right',labels:{font:{size:11}, color: p.legendText}}, tooltip:{ backgroundColor:p.tooltipBg, titleColor:p.tooltipBody, bodyColor:p.tooltipBody } } }
     });
   }
 }
@@ -3771,7 +4078,7 @@ function updateExcecoesBadges() {
 // ─── SUPERVISOR PROMO HISTORY ─────────────────
 function renderSupervisorPromoPage() {
   const employees = getEmployees();
-  const myTeam    = currentUser.role==='supervisor' ? employees.filter(e=>e.supervisor===currentUser.email) : employees;
+  const myTeam    = _ntMyTeamEmployees(employees);
   renderPromoHistory('sup-', myTeam);
 }
 

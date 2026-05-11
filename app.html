@@ -648,10 +648,13 @@
     <div id="page-admin-matrix" class="page-section hidden">
       <div class="page-header">
         <h2><i class="fas fa-th"></i> Matriz de Polivalência</h2>
-        <div class="matrix-filters">
-          <select id="matrix-sector-filter" onchange="renderMatrix()">
-            <option value="">Todos os Setores</option>
-          </select>
+        <div class="matrix-header-actions">
+          <span id="matrix-supervisor-scope-label" class="page-sub matrix-scope-label hidden"></span>
+          <div class="matrix-filters" id="matrix-sector-filter-wrap">
+            <select id="matrix-sector-filter" onchange="renderMatrix()">
+              <option value="">Todos os Setores</option>
+            </select>
+          </div>
         </div>
       </div>
       <div class="matrix-legend">
@@ -714,18 +717,50 @@
         <h2><i class="fas fa-home"></i> Meu Painel</h2>
         <span class="page-sub" id="supervisor-greeting">Olá, Supervisor!</span>
       </div>
-      <div id="supervisor-alert" class="alert-banner hidden">
-        <i class="fas fa-bell"></i>
-        <span id="supervisor-alert-text"></span>
-      </div>
+
       <div class="cards-grid-2">
-        <div class="stat-card blue"><div class="stat-icon"><i class="fas fa-users"></i></div><div class="stat-info"><span class="stat-value" id="sup-stat-total">0</span><span class="stat-label">Minha Equipe</span></div></div>
-        <div class="stat-card orange"><div class="stat-icon"><i class="fas fa-clipboard-check"></i></div><div class="stat-info"><span class="stat-value" id="sup-stat-pending">0</span><span class="stat-label">Aguardam Avaliação</span></div></div>
+        <div class="stat-card blue"><div class="stat-icon"><i class="fas fa-users"></i></div><div class="stat-info"><span class="stat-value" id="sup-stat-total">0</span><span class="stat-label">Colaboradores no seu escopo</span></div></div>
+        <div class="stat-card orange"><div class="stat-icon"><i class="fas fa-clipboard-check"></i></div><div class="stat-info"><span class="stat-value" id="sup-stat-pending">0</span><span class="stat-label">Pendentes de avaliação</span></div></div>
       </div>
-      <h3 class="section-title"><i class="fas fa-user-clock"></i> Funcionários Aptos para Avaliação</h3>
-      <div id="sup-eligible-list" class="employee-cards-list"></div>
-      <h3 class="section-title mt-20"><i class="fas fa-users"></i> Toda a Equipe</h3>
-      <div id="sup-all-list" class="employee-cards-list"></div>
+
+      <div class="dashboard-row sup-dash-alerts-row">
+        <div id="sup-dash-alert-eval" class="sup-dash-alert sup-dash-alert--warn" role="region" aria-label="Avaliações"></div>
+        <div id="sup-dash-alert-abs" class="sup-dash-alert">
+          <div class="sup-dash-alert-icon"><i class="fas fa-user-slash"></i></div>
+          <div class="sup-dash-alert-body">
+            <div class="sup-dash-alert-title">Faltas não justificadas na semana</div>
+            <p class="sup-dash-alert-text" id="sup-dash-alert-abs-sub">Carregando frequência da semana…</p>
+            <button type="button" class="btn-outline btn-sm sup-dash-alert-btn" onclick="navigateTo('supervisor-team-attendance')"><i class="fas fa-clipboard-check"></i> Frequência da equipe</button>
+          </div>
+          <div class="sup-dash-alert-value" id="sup-dash-alert-abs-val" aria-live="polite">…</div>
+        </div>
+      </div>
+
+      <div class="dashboard-row">
+        <div class="chart-card">
+          <div class="chart-card-header">
+            <div>
+              <h3><i class="fas fa-chart-pie"></i> Distribuição por cargo</h3>
+              <span class="chart-sub">Somente colaboradores vinculados ao seu usuário (equipe)</span>
+            </div>
+          </div>
+          <div style="height:260px; position:relative;">
+            <canvas id="sup-chart-cargo-pie"></canvas>
+          </div>
+        </div>
+        <div class="chart-card">
+          <div class="chart-card-header">
+            <div>
+              <h3><i class="fas fa-chart-bar"></i> Progresso de carreira</h3>
+              <span class="chart-sub" id="sup-chart-career-sub">—</span>
+            </div>
+          </div>
+          <div style="height:280px; position:relative;">
+            <canvas id="sup-chart-career-bar"></canvas>
+          </div>
+        </div>
+      </div>
+
       <div class="promo-shortcut-banner" id="promo-shortcut-banner-container" onclick="navigateTo('supervisor-promo-history')" style="margin-top:20px;display:none">
         <div class="promo-shortcut-content">
           <i class="fas fa-rocket"></i>
@@ -780,17 +815,32 @@
         </div>
         <span class="page-sub" id="da-page-sub">Lançamento diário por colaborador — um documento por dia e equipe</span>
       </div>
-      <div class="da-toolbar">
+      <div class="da-toolbar" id="da-toolbar">
         <!-- input nativo: fica sincronizado com o calendário (fallback) -->
         <div class="form-group da-date-field" hidden>
           <label for="da-attendance-date">Data</label>
           <input type="date" id="da-attendance-date" />
         </div>
 
-        <!-- Seletor de equipe (apenas Admin/Gerente) -->
-        <div class="form-group da-team-picker" id="da-team-picker" hidden>
-          <label for="da-team-select"><i class="fas fa-user-tie"></i> Equipe (Supervisor)</label>
-          <select id="da-team-select" class="da-team-select" aria-label="Selecionar equipe do supervisor"></select>
+        <div class="da-toolbar-filters">
+          <!-- Seletor de equipe (apenas Admin/Gerente) -->
+          <div class="form-group da-team-picker" id="da-team-picker" hidden>
+            <label for="da-team-select"><i class="fas fa-user-tie"></i> Equipe (Supervisor)</label>
+            <select id="da-team-select" class="da-team-select" aria-label="Selecionar equipe do supervisor"></select>
+          </div>
+
+          <div class="form-group da-month-stepper-wrap" id="da-month-stepper-wrap">
+            <span class="da-month-stepper-label" id="da-month-stepper-label"><i class="fas fa-calendar-alt"></i> Mês</span>
+            <div class="da-month-stepper" role="group" aria-label="Navegar mês de referência">
+              <button type="button" class="da-month-step-btn" id="da-month-prev" aria-label="Mês anterior">
+                <i class="fas fa-chevron-left" aria-hidden="true"></i>
+              </button>
+              <div class="da-month-step-label" id="da-month-step-label" aria-live="polite">—</div>
+              <button type="button" class="da-month-step-btn" id="da-month-next" aria-label="Próximo mês">
+                <i class="fas fa-chevron-right" aria-hidden="true"></i>
+              </button>
+            </div>
+          </div>
         </div>
 
         <div id="da-calendar" class="da-calendar" aria-label="Navegação de calendário"></div>
@@ -817,6 +867,25 @@
               <button type="button" class="btn-outline" id="da-cons-refresh-btn" title="Recarregar resumo do período">
                 <i class="fas fa-rotate"></i> Atualizar
               </button>
+            </div>
+          </div>
+
+          <!-- Assiduidade detalhada: largura total, foco visual do resumo -->
+          <div class="da-assiduity-card da-assiduity-card--full da-assiduity-card--hero" aria-label="Assiduidade detalhada">
+            <div class="da-assiduity-head">
+              <h4 class="da-assiduity-title"><i class="fas fa-table"></i> Assiduidade Detalhada</h4>
+              <span class="da-assiduity-sub" id="da-assiduity-period-hint"></span>
+            </div>
+            <div class="da-assiduity-scroll" id="da-assiduity-scroll">
+              <div id="da-assiduity-table-mount"></div>
+            </div>
+            <div class="da-assiduity-foot" aria-label="Legenda de cores">
+              <span class="da-legend-item"><span class="da-assid-cell-sq da-legend-swatch status-presente" aria-hidden="true"></span> Presença confirmada</span>
+              <span class="da-legend-item"><span class="da-assid-cell-sq da-legend-swatch status-falta" aria-hidden="true"></span> Falta</span>
+              <span class="da-legend-item"><span class="da-assid-cell-sq da-legend-swatch status-justificada" aria-hidden="true"></span> Justificada</span>
+              <span class="da-legend-item"><span class="da-assid-cell-sq da-legend-swatch status-folga" aria-hidden="true"></span> Folga</span>
+              <span class="da-legend-item"><span class="da-assid-cell-sq da-legend-swatch status-cancelado" aria-hidden="true"></span> Turno cancelado</span>
+              <span class="da-legend-item"><span class="da-assid-cell-sq da-legend-swatch status-sem-registro" aria-hidden="true"></span> Sem registro / futuro</span>
             </div>
           </div>
 
@@ -851,7 +920,8 @@
                     <th>Colaborador</th>
                     <th>Qtd Faltas</th>
                     <th>Qtd Presenças</th>
-                    <th>Justificativas</th>
+                    <th>Folgas</th>
+                    <th>Justificadas</th>
                     <th>Assiduidade</th>
                     <th>Status</th>
                   </tr>
@@ -861,20 +931,6 @@
             </div>
             <div class="da-cons-hint">
               Clique em um colaborador para ver as datas das faltas e retificar.
-            </div>
-          </div>
-
-          <div class="da-heatmap-card">
-            <div class="da-heatmap-head">
-              <h4 class="da-heatmap-title"><i class="fas fa-border-all"></i> Heatmap de Faltas (dia × colaborador)</h4>
-              <div class="da-heatmap-legend" aria-label="Legenda do heatmap">
-                <span class="da-hm-leg"><span class="da-hm-dot da-hm-dot--ok"></span> Presença</span>
-                <span class="da-hm-leg"><span class="da-hm-dot da-hm-dot--bad"></span> Falta</span>
-                <span class="da-hm-leg"><span class="da-hm-dot da-hm-dot--neu"></span> Sem registro</span>
-              </div>
-            </div>
-            <div class="da-heatmap-wrap" id="da-heatmap-wrap">
-              <div id="skel-da-heatmap" class="nt-skel nt-skel-heatmap" style="display:none"></div>
             </div>
           </div>
         </section>
@@ -920,6 +976,20 @@
               <div class="da-exec-metric-body">
                 <div class="da-exec-metric-label">Atestados</div>
                 <div class="da-exec-metric-value" id="da-exec-atestados">0</div>
+              </div>
+            </div>
+            <div class="da-exec-metric da-exec-metric--folga">
+              <div class="da-exec-metric-icon"><i class="fas fa-umbrella-beach" aria-hidden="true"></i></div>
+              <div class="da-exec-metric-body">
+                <div class="da-exec-metric-label">Folgas</div>
+                <div class="da-exec-metric-value" id="da-exec-folgas">0</div>
+              </div>
+            </div>
+            <div class="da-exec-metric da-exec-metric--cancel">
+              <div class="da-exec-metric-icon"><i class="fas fa-ban" aria-hidden="true"></i></div>
+              <div class="da-exec-metric-body">
+                <div class="da-exec-metric-label">Turnos cancelados</div>
+                <div class="da-exec-metric-value" id="da-exec-cancelados">0</div>
               </div>
             </div>
           </div>
@@ -986,6 +1056,22 @@
 
         <!-- Modo edição (input da frequência) -->
         <div class="table-wrapper da-edit-wrap" id="da-edit-wrap">
+          <div class="da-mark-all-row" id="da-mark-all-row" hidden>
+            <div class="da-bulk-toolbar" role="group" aria-label="Ações em massa na lista">
+              <p class="da-bulk-toolbar-hint">Altera apenas quem está em «Não definido». Não salva no Firestore até você clicar em Salvar.</p>
+              <div class="da-bulk-toolbar-btns">
+                <button type="button" class="btn-outline da-bulk-chip" id="da-bulk-presente" data-da-bulk="presente" title="Presente apenas para quem ainda está em Não definido">
+                  <i class="fas fa-user-check" aria-hidden="true"></i> Marcar todos como Presente
+                </button>
+                <button type="button" class="btn-outline da-bulk-chip" id="da-bulk-folga" data-da-bulk="folga" title="Folga apenas para quem ainda está em Não definido">
+                  <i class="fas fa-umbrella-beach" aria-hidden="true"></i> Marcar todos como Folga
+                </button>
+                <button type="button" class="btn-outline da-bulk-chip" id="da-bulk-cancelado" data-da-bulk="turno_cancelado" title="Turno cancelado apenas para quem ainda está em Não definido">
+                  <i class="fas fa-ban" aria-hidden="true"></i> Marcar todos como Turno Cancelado
+                </button>
+              </div>
+            </div>
+          </div>
           <table class="data-table da-attendance-table">
             <thead>
               <tr>
@@ -1001,6 +1087,8 @@
           <button type="button" class="btn-outline" id="da-cancel-edit-btn" hidden><i class="fas fa-undo"></i> Cancelar edição</button>
         </div>
       </div>
+
+      <div id="da-assid-flytip" class="da-assid-flytip" hidden role="tooltip"></div>
 
       <!-- Modal: histórico do colaborador (faltas no período) -->
       <div class="da-modal" id="da-emp-modal" hidden aria-hidden="true">

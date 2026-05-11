@@ -124,7 +124,31 @@ window._ntFetchProfileByEmail = async function(email) {
     const uid = String(auth?.currentUser?.uid || '').trim();
     if (uid) {
       const ref = doc(db, 'users', uid);
-      const snap = await getDoc(ref);
+      let snap = await getDoc(ref);
+      if (snap.exists()) return { ...snap.data(), id: snap.id };
+
+      // Doc ausente em /users/{uid}: cria com o usuário autenticado antes da query por e-mail.
+      const cfg = window.LUMINI_AUTH_CONFIG;
+      let role = 'supervisor';
+      let name = em;
+      let leaderKey;
+      if (cfg && typeof cfg.resolveAuthForEmail === 'function') {
+        const resolved = cfg.resolveAuthForEmail(em);
+        if (resolved) {
+          role = String(resolved.role || '').trim() || 'supervisor';
+          name = String(resolved.name || '').trim() || em;
+          const lk = resolved.leaderKey != null ? String(resolved.leaderKey).trim() : '';
+          if (lk) leaderKey = lk;
+        }
+      }
+      await window._ntEnsureUserDocForUid({
+        uid,
+        email: em,
+        role,
+        name,
+        ...(leaderKey ? { leaderKey } : {})
+      });
+      snap = await getDoc(ref);
       if (snap.exists()) return { ...snap.data(), id: snap.id };
     }
   } catch (e) {
@@ -273,6 +297,8 @@ function _luminiFieldsToEmployee(f, index) {
     currentRole: (f.cargo || '').trim() || 'Ajudante de Produção',
     desiredRole: null,
     minMonths: null,
+    /** Chave de equipe (líder normalizado) — alinhado a `users.teamId` / frequência. */
+    teamId: supervisorKey || null,
     supervisor: supervisorKey,
     rhLider: liderRaw,
     rhSituacao: (f.sit || '').trim() || 'ATIVO',
@@ -542,19 +568,20 @@ window.initFirebase = async function() {
     usrs = mig.usrs;
     const migratedEmps = mig.emps;
     excs = mig.excs;
+    const enrichedEmps = migratedEmps.map(e => _ntEnrichEmployeeForTeamBinding(e, usrs));
     if (mig.usersTouched) {
       await persistCollection('users', usrs);
     }
     if (mig.empsTouched && !window._employeesFromSheet) {
-      await persistCollection('employees', migratedEmps);
+      await persistCollection('employees', enrichedEmps);
     }
     if (mig.excTouched) {
       await persistCollection('excecoes', excs);
     }
 
-    window._cache.employees   = migratedEmps;
+    window._cache.employees   = enrichedEmps;
     if (window._employeesFromSheet && typeof window.appEmployeesToHREmployees === 'function') {
-      window._cache.hrEmployees = window.appEmployeesToHREmployees(migratedEmps);
+      window._cache.hrEmployees = window.appEmployeesToHREmployees(enrichedEmps);
     }
     window._cache.careers     = cars;
     window._cache.evaluations = evals;
@@ -584,21 +611,7 @@ window.initFirebase = async function() {
 
 // ─── Listener tempo real ─────────────────────
 function listenRealtime() {
-  // Funcionários — filtra cadastros manuais (sem rhMatricula). Planilha: não sobrescreve o cache.
-  onSnapshot(collection(db, 'employees'), snap => {
-    if (!window._dbReady) return;
-    if (window._employeesFromSheet) return;
-    window._cache.employees = snap.docs
-      .map(d => ({ ...d.data(), id: d.id }))
-      .filter(e => e.rhMatricula); // ignora cadastros manuais
-    if (window.currentUser && window.updateNotifBadge) {
-      window.updateNotifBadge();
-      window.updateExcecoesBadges && window.updateExcecoesBadges();
-    }
-    if (window.currentPage && window.refreshCurrentPage) {
-      window.refreshCurrentPage();
-    }
-  });
+  // Funcionários: escuta escopada em `_ntBindEmployeesFirestoreListener` (app.js após login).
 
   // Exceções
   onSnapshot(collection(db, 'excecoes'), snap => {
@@ -660,8 +673,10 @@ function listenRealtime() {
 
 window.getEmployees = function() { return window._cache.employees || []; };
 window.saveEmployees = function(arr) {
-  window._cache.employees = arr;
-  persistCollection('employees', arr);
+  const usersArr = window._cache.users || [];
+  const mapped = (Array.isArray(arr) ? arr : []).map(e => _ntEnrichEmployeeForTeamBinding({ ...e }, usersArr));
+  window._cache.employees = mapped;
+  persistCollection('employees', mapped);
 };
 
 window.getCareers = function() { return window._cache.careers || []; };
@@ -918,16 +933,158 @@ function _ntNormalizeTeamId(v) {
 }
 window._ntNormalizeTeamId = _ntNormalizeTeamId;
 
-function _ntNormAttendanceStatus(st) {
-  const s = String(st == null ? '' : st).trim().toLowerCase();
-  // legado (P/F)
-  if (s === 'p' || s === 'presenca' || s === 'presença' || s === 'presente') return 'presente';
-  if (s === 'f' || s === 'falta') return 'falta';
-  if (s === 'folga') return 'folga';
-  if (s === 'turno_cancelado' || s === 'cancelado') return 'turno_cancelado';
-  if (s === 'atestado') return 'atestado';
-  return s || 'pending';
+const EMPLOYEES_FS_COL = 'employees';
+/** @type {Array<() => void>} */
+let _ntEmployeesFirestoreUnsubs = [];
+
+function _ntStopEmployeesFirestoreListeners() {
+  _ntEmployeesFirestoreUnsubs.forEach(unsub => {
+    try {
+      if (typeof unsub === 'function') unsub();
+    } catch (_) {}
+  });
+  _ntEmployeesFirestoreUnsubs = [];
 }
+
+/**
+ * Preenche `teamId` (regras Firestore / frequência) e `supervisor_id` (UID do Auth do supervisor)
+ * a partir de `supervisor` + coleção `users`.
+ */
+function _ntEnrichEmployeeForTeamBinding(e, usersArr) {
+  if (!e || typeof e !== 'object') return e;
+  const users = Array.isArray(usersArr) ? usersArr : [];
+  const supRaw = String(e.supervisor != null ? e.supervisor : '').trim();
+  const normFromSupervisor = supRaw ? _ntNormalizeTeamId(supRaw) : '';
+  const existingTeam = String(e.teamId != null ? e.teamId : '').trim();
+  const teamId = existingTeam || normFromSupervisor || null;
+
+  let supervisor_id = String(e.supervisor_id != null ? e.supervisor_id : '').trim();
+  if (!supervisor_id && users.length) {
+    if (supRaw.includes('@')) {
+      const low = supRaw.toLowerCase();
+      const hit = users.find(u => String(u.email || '').toLowerCase() === low);
+      if (hit && hit.id) supervisor_id = String(hit.id);
+    } else if (normFromSupervisor) {
+      const hit = users.find(u => {
+        const lk = String(u.leaderKey || u.teamId || '').trim();
+        return lk && _ntNormalizeTeamId(lk) === normFromSupervisor;
+      });
+      if (hit && hit.id) supervisor_id = String(hit.id);
+    }
+  }
+  const out = { ...e, teamId };
+  if (supervisor_id) out.supervisor_id = supervisor_id;
+  return out;
+}
+
+function _ntEmployeesFromSnapDocuments(snap, usersArr) {
+  const users = Array.isArray(usersArr) ? usersArr : [];
+  return snap.docs
+    .map(d => _ntEnrichEmployeeForTeamBinding({ ...d.data(), id: d.id }, users))
+    .filter(row => row.rhMatricula);
+}
+
+function _ntMergeSupervisorEmployeeSnaps(snapA, snapB, usersArr) {
+  const users = Array.isArray(usersArr) ? usersArr : [];
+  const byId = new Map();
+  const ingest = snap => {
+    if (!snap || !snap.docs) return;
+    snap.docs.forEach(d => {
+      const row = _ntEnrichEmployeeForTeamBinding({ ...d.data(), id: d.id }, users);
+      if (row.rhMatricula) byId.set(d.id, row);
+    });
+  };
+  ingest(snapA);
+  ingest(snapB);
+  return Array.from(byId.values());
+}
+
+function _ntNotifyEmployeesCacheHook() {
+  if (window.currentUser && window.updateNotifBadge) {
+    window.updateNotifBadge();
+    if (window.updateExcecoesBadges) window.updateExcecoesBadges();
+  }
+  if (window.currentPage && window.refreshCurrentPage) window.refreshCurrentPage();
+}
+
+/**
+ * Inscreve `employees` no Firestore: visão global (admin/RH/gerente/diretor) ou queries por
+ * `supervisor_id` + `teamId` para supervisores (compatível com regras de segurança).
+ */
+window._ntBindEmployeesFirestoreListener = function() {
+  if (!window._dbReady || window._employeesFromSheet) return;
+  _ntStopEmployeesFirestoreListeners();
+  const authInst = window._fbAuth;
+  const authUser = authInst && authInst.currentUser;
+  const cu = window.currentUser;
+  if (!authUser || !cu) return;
+
+  const role = String(cu.role || '').toLowerCase();
+  const fullAccess = role === 'admin' || role === 'boss' || role === 'manager' || role === 'rh';
+  const colRef = collection(db, EMPLOYEES_FS_COL);
+
+  if (fullAccess) {
+    const unsub = onSnapshot(colRef, snap => {
+      if (!window._dbReady) return;
+      window._cache.employees = _ntEmployeesFromSnapDocuments(snap, window._cache.users || []);
+      _ntNotifyEmployeesCacheHook();
+    }, err => console.error('[employees]', err && err.message ? err.message : err));
+    _ntEmployeesFirestoreUnsubs.push(unsub);
+    return;
+  }
+
+  if (role !== 'supervisor') return;
+
+  const uid = String(authUser.uid || '').trim();
+  const teamKey = _ntNormalizeTeamId(String(cu.leaderKey || cu.email || ''));
+  let snapA = null;
+  let snapB = null;
+  const mergeAndSet = () => {
+    if (!window._dbReady) return;
+    const users = window._cache.users || [];
+    if (uid && teamKey) {
+      window._cache.employees = _ntMergeSupervisorEmployeeSnaps(snapA, snapB, users);
+    } else if (uid) {
+      window._cache.employees = snapA ? _ntEmployeesFromSnapDocuments(snapA, users) : [];
+    } else if (teamKey) {
+      window._cache.employees = snapB ? _ntEmployeesFromSnapDocuments(snapB, users) : [];
+    } else {
+      window._cache.employees = [];
+    }
+    _ntNotifyEmployeesCacheHook();
+  };
+
+  if (uid) {
+    const q1 = query(colRef, where('supervisor_id', '==', uid));
+    const u1 = onSnapshot(q1, snap => {
+      snapA = snap;
+      mergeAndSet();
+    }, err => console.warn('[employees] supervisor_id:', err && err.message ? err.message : err));
+    _ntEmployeesFirestoreUnsubs.push(u1);
+  }
+  if (teamKey) {
+    const q2 = query(colRef, where('teamId', '==', teamKey));
+    const u2 = onSnapshot(q2, snap => {
+      snapB = snap;
+      mergeAndSet();
+    }, err => console.warn('[employees] teamId:', err && err.message ? err.message : err));
+    _ntEmployeesFirestoreUnsubs.push(u2);
+  }
+  mergeAndSet();
+};
+
+function _ntNormAttendanceStatus(st) {
+  const raw = String(st == null ? '' : st).trim().toLowerCase();
+  const sKey = raw.replace(/\s+/g, '_').replace(/-/g, '_');
+  // legado (P/F)
+  if (raw === 'p' || raw === 'presenca' || raw === 'presença' || raw === 'presente') return 'presente';
+  if (raw === 'f' || raw === 'falta') return 'falta';
+  if (raw === 'folga' || sKey === 'folga') return 'folga';
+  if (sKey === 'turno_cancelado' || raw === 'cancelado' || sKey === 'cancelado') return 'turno_cancelado';
+  if (raw === 'atestado' || sKey === 'atestado' || sKey === 'justificada' || raw === 'justificada' || sKey === 'justificado' || raw === 'justificado') return 'atestado';
+  return raw || 'pending';
+}
+window._ntNormAttendanceStatus = _ntNormAttendanceStatus;
 
 function _ntDailyAttendanceDocId(teamId, dateStr) {
   const t = _ntNormalizeTeamId(teamId).replace(/\//g, '_');
@@ -994,7 +1151,7 @@ window._ntSaveDailyAttendance = async function(opts) {
 
   const cleaned = records.map(r => {
     const empId = String(r.employeeId || '').trim();
-    const status = String(r.status || 'pending').trim();
+    const status = _ntNormAttendanceStatus(r.status);
     const prior = priorById[empId];
     if (!prior) {
       return {
@@ -1007,7 +1164,7 @@ window._ntSaveDailyAttendance = async function(opts) {
         updatedAt: now
       };
     }
-    const statusChanged = String(prior.status || '') !== status;
+    const statusChanged = _ntNormAttendanceStatus(prior.status) !== status;
     return {
       employeeId: empId,
       status,
@@ -1021,10 +1178,14 @@ window._ntSaveDailyAttendance = async function(opts) {
 
   const docId = _ntDailyAttendanceDocId(teamId, dateStr);
   const ref = doc(db, DAILY_ATTENDANCE_COL, docId);
+  const monthYear = dateStr.length >= 7 ? dateStr.slice(0, 7) : '';
 
   const payload = {
     date: dateStr,
+    month_year: monthYear,
     teamId,
+    /** Mesmo valor que `teamId` — usado em queries do Resumo Geral (filtro por supervisor). */
+    supervisor_id: teamId,
     status: st,
     records: cleaned,
     updatedAt: now,
@@ -1088,6 +1249,7 @@ window._ntListDailyAttendanceDatesForTeam = async function(opts) {
  *   presentes: number,
  *   faltas: number,
  *   atestados: number,
+ *   folgas: number,
  *   faltantes: string[],
  *   hasAdminEdits: boolean,
  *   total: number
@@ -1124,6 +1286,7 @@ window._ntGetDailyAttendanceSummariesForTeam = async function(opts) {
     let presentes = 0;
     let faltas = 0;
     let atestados = 0;
+    let folgas = 0;
     let hasAdminEdits = false;
     const faltantes = [];
     for (const r of records) {
@@ -1132,6 +1295,7 @@ window._ntGetDailyAttendanceSummariesForTeam = async function(opts) {
       if (st === 'presente') presentes += 1;
       else if (st === 'falta') { faltas += 1; faltantes.push(String(r.employeeId)); }
       else if (st === 'atestado') atestados += 1;
+      else if (st === 'folga') folgas += 1;
       const updRole = String(r.updatedRole || '').trim().toLowerCase();
       const crtRole = String(r.createdRole || '').trim().toLowerCase();
       if ((updRole === 'admin' || updRole === 'manager') && updRole !== crtRole) {
@@ -1142,6 +1306,7 @@ window._ntGetDailyAttendanceSummariesForTeam = async function(opts) {
       presentes,
       faltas,
       atestados,
+      folgas,
       faltantes,
       hasAdminEdits,
       total: records.length
@@ -1154,7 +1319,9 @@ window._ntGetDailyAttendanceSummariesForTeam = async function(opts) {
  * Lista documentos `daily_attendance` completos para uma equipe em um intervalo.
  * Útil para montar dashboards consolidados (rankings/heatmap) sem múltiplos fetches por dia.
  *
- * @param {{ teamId: string, startDate: string, endDate: string }} opts
+ * @param {{ teamId: string, startDate: string, endDate: string, monthYear?: string }} opts
+ *   Quando `monthYear` (YYYY-MM) é informado, consulta também por esse campo (índice composto)
+ *   e une com o intervalo de `date` para incluir documentos legados sem `month_year`.
  * @returns {Promise<Array<{ id: string, date: string, teamId: string, records: any[] }>>}
  */
 window._ntListDailyAttendanceDocsForTeam = async function(opts) {
@@ -1164,43 +1331,151 @@ window._ntListDailyAttendanceDocsForTeam = async function(opts) {
   const endDate = String(opts && opts.endDate ? opts.endDate : '').trim();
   if (!teamId || !startDate || !endDate) throw new Error('Equipe e intervalo são obrigatórios.');
 
-  const q = query(
-    collection(db, DAILY_ATTENDANCE_COL),
+  const monthYear = String(opts && opts.monthYear ? opts.monthYear : '').trim();
+  const useMonthYear = /^\d{4}-\d{2}$/.test(monthYear);
+
+  const col = collection(db, DAILY_ATTENDANCE_COL);
+  const qRange = query(
+    col,
     where('teamId', '==', teamId),
     where('date', '>=', startDate),
     where('date', '<=', endDate)
   );
-  let snap;
+
+  /** @type {any[]} */
+  const snaps = [];
+
+  if (useMonthYear) {
+    const qMy = query(col, where('teamId', '==', teamId), where('month_year', '==', monthYear));
+    try {
+      snaps.push(await getDocs(qMy));
+    } catch (e) {
+      console.warn('[daily_attendance] consulta month_year:', e && (e.message || String(e)));
+    }
+  }
+
+  let snapRange;
   try {
-    snap = await getDocs(q);
+    snapRange = await getDocs(qRange);
   } catch (e) {
     const detail = e && (e.message || String(e)) ? (e.message || String(e)) : 'erro desconhecido';
     throw new Error(`Falha ao listar documentos de frequência (daily_attendance): ${detail}`);
   }
+  snaps.push(snapRange);
 
-  const out = snap.docs
-    .map(d => ({ id: d.id, ...(d.data() || {}) }))
-    .filter(x => x && x.date)
-    .map(x => ({
-      id: String(x.id || ''),
-      date: String(x.date || '').trim(),
-      teamId: _ntNormalizeTeamId(x.teamId),
-      records: Array.isArray(x.records) ? x.records : []
-    }))
-    .filter(x => _ntNormalizeTeamId(x.teamId) === teamId)
-    .sort((a, b) => String(a.date).localeCompare(String(b.date)));
-  return out;
+  const byId = new Map();
+  for (const snap of snaps) {
+    snap.docs.forEach(d => {
+      const raw = d.data() || {};
+      const dateStr = raw.date != null ? String(raw.date).trim() : '';
+      if (!dateStr) return;
+      if (dateStr < startDate || dateStr > endDate) return;
+      const tid = _ntNormalizeTeamId(raw.teamId);
+      if (tid !== teamId) return;
+      byId.set(d.id, {
+        id: String(d.id || ''),
+        date: dateStr,
+        teamId: tid,
+        records: Array.isArray(raw.records) ? raw.records : []
+      });
+    });
+  }
+
+  return Array.from(byId.values()).sort((a, b) => String(a.date).localeCompare(String(b.date)));
 };
 
 /**
  * Lista documentos `daily_attendance` no intervalo (campo `date` sempre YYYY-MM-DD).
  * Usado pelo dashboard/calendário de frequência; normaliza status das linhas (ex.: P/F).
  *
- * @param {{ teamId: string, startDate: string, endDate: string }} opts
+ * @param {{ teamId: string, startDate: string, endDate: string, monthYear?: string }} opts
  * @returns {Promise<Array<{ id: string, date: string, teamId: string, records: any[] }>>}
  */
 window._ntListAttendanceDocsForTeam = async function(opts) {
   const rows = await window._ntListDailyAttendanceDocsForTeam(opts);
+  return rows.map(d => ({
+    ...d,
+    date: String(d.date || '').trim(),
+    teamId: _ntNormalizeTeamId(d.teamId),
+    records: (Array.isArray(d.records) ? d.records : []).map(r => ({
+      ...r,
+      status: _ntNormAttendanceStatus(r && r.status)
+    }))
+  }));
+};
+
+/**
+ * Lista `daily_attendance` para o dashboard Resumo Geral (mês inteiro).
+ * - Sem `supervisorId`: todos os documentos do mês (Admin/Gerente; filtro só `month_year`).
+ * - Com `supervisorId`: une consultas por `supervisor_id` e por `teamId` (legado sem campo novo).
+ *
+ * @param {{ monthYear: string, startDate: string, endDate: string, supervisorId?: string }} opts
+ * @returns {Promise<Array<{ id: string, date: string, teamId: string, records: any[] }>>}
+ */
+window._ntListDailyAttendanceDocsForDashboard = async function(opts) {
+  if (!window._dbReady) throw new Error('Firebase ainda não está pronto. Aguarde e tente de novo.');
+  const monthYear = String(opts && opts.monthYear ? opts.monthYear : '').trim();
+  const startDate = String(opts && opts.startDate ? opts.startDate : '').trim();
+  const endDate = String(opts && opts.endDate ? opts.endDate : '').trim();
+  const supervisorIdRaw = opts && opts.supervisorId != null ? String(opts.supervisorId).trim() : '';
+  const supervisorId = supervisorIdRaw ? _ntNormalizeTeamId(supervisorIdRaw) : '';
+
+  if (!/^\d{4}-\d{2}$/.test(monthYear) || !startDate || !endDate) {
+    throw new Error('monthYear (YYYY-MM), startDate e endDate são obrigatórios.');
+  }
+
+  const col = collection(db, DAILY_ATTENDANCE_COL);
+  /** @type {Map<string, { id: string, date: string, teamId: string, records: any[] }>} */
+  const byId = new Map();
+
+  const ingestSnap = (snap) => {
+    snap.docs.forEach(d => {
+      const raw = d.data() || {};
+      const dateStr = raw.date != null ? String(raw.date).trim() : '';
+      if (!dateStr || dateStr < startDate || dateStr > endDate) return;
+      const tid = _ntNormalizeTeamId(raw.teamId);
+      byId.set(d.id, {
+        id: String(d.id || ''),
+        date: dateStr,
+        teamId: tid,
+        records: Array.isArray(raw.records) ? raw.records : []
+      });
+    });
+  };
+
+  try {
+    if (!supervisorId) {
+      const qAll = query(col, where('month_year', '==', monthYear));
+      const snapAll = await getDocs(qAll);
+      ingestSnap(snapAll);
+    } else {
+      const qSid = query(
+        col,
+        where('supervisor_id', '==', supervisorId),
+        where('month_year', '==', monthYear)
+      );
+      const qTid = query(
+        col,
+        where('teamId', '==', supervisorId),
+        where('month_year', '==', monthYear)
+      );
+      try {
+        ingestSnap(await getDocs(qSid));
+      } catch (e) {
+        console.warn('[daily_attendance] dashboard supervisor_id:', e && (e.message || String(e)));
+      }
+      try {
+        ingestSnap(await getDocs(qTid));
+      } catch (e) {
+        console.warn('[daily_attendance] dashboard teamId:', e && (e.message || String(e)));
+      }
+    }
+  } catch (e) {
+    const detail = e && (e.message || String(e)) ? (e.message || String(e)) : 'erro desconhecido';
+    throw new Error(`Falha ao listar frequência (dashboard): ${detail}`);
+  }
+
+  const rows = Array.from(byId.values()).sort((a, b) => String(a.date).localeCompare(String(b.date)));
   return rows.map(d => ({
     ...d,
     date: String(d.date || '').trim(),

@@ -38,7 +38,7 @@
 
   // Sanitização extrema: garante que não exista whitespace/quebras de linha/caracteres ocultos na apiKey.
   // Evita casos onde a chave "parece" correta, mas foi colada com caracteres invisíveis.
-  const apiKey = String("AIzaSyAVB6QZCUE4fUyrFMh7Oex0rcNRLVP9uI").trim();
+  const apiKey = String("AIzaSyAVB6QZCUbE4fUyrFMh7Oex0rcNRLVP9uI").trim();
 
   window.firebaseConfig = {
     apiKey,
